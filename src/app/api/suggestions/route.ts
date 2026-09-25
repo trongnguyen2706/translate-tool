@@ -3,7 +3,7 @@ import { apiError, checkDailyLimit, recordUsage, requireApiSession } from "@/lib
 import { hasOpenAIConfig } from "@/lib/config";
 import { openaiClient, openaiModel } from "@/lib/openai/client";
 import { summarizeCost } from "@/lib/openai/pricing";
-import { learningInstructions, learningMetadataProperties, learningMetadataRequired } from "@/lib/openai/learning-schema";
+import { aiTagInstructions, aiTagsProperty, learningInstructions, learningMetadataProperties, learningMetadataRequired } from "@/lib/openai/learning-schema";
 import { suggestionsRequestSchema, suggestionSchema } from "@/lib/validation";
 import { cefrLevels } from "@/lib/learning";
 import { normalizeText } from "@/lib/normalize";
@@ -19,9 +19,10 @@ const itemSchema = {
     meaning_en: { type: "string" },
     example: { type: "string" },
     collocations: { type: "array", items: { type: "string" } },
+    tags: aiTagsProperty,
     ...learningMetadataProperties
   },
-  required: ["term", "kind", "meaning_vi", "meaning_en", "example", "collocations", ...learningMetadataRequired],
+  required: ["term", "kind", "meaning_vi", "meaning_en", "example", "collocations", "tags", ...learningMetadataRequired],
   additionalProperties: false
 } as const;
 
@@ -45,7 +46,7 @@ export async function POST(request: NextRequest) {
     const translation = parsed.data.source === "translation" ? parsed.data.translation : "";
     const response = await openaiClient().responses.create({
       model: openaiModel(),
-      instructions: `${learningInstructions} Suggest useful English words, expressions, and collocations related to the supplied text. For English source text, extract expressions actually present in it. For Vietnamese source text, propose natural English equivalents and say they are proposed expressions in the learning reason. Meanings must fit context. Examples must be short and natural. Return no more than the requested count. Respect the learner's CEFR level as a minimum: suggest items at that level or higher. Also respect IELTS mode, skill, and topic. If no relevant item exists, return an empty array. Focus terms may have directly related collocations, but do not recursively expand examples.`,
+      instructions: `${learningInstructions} ${aiTagInstructions} Suggest useful English words, expressions, and collocations related to the supplied text. For English source text, extract expressions actually present in it. For Vietnamese source text, propose natural English equivalents and say they are proposed expressions in the learning reason. Meanings must fit context. Examples must be short and natural. Return no more than the requested count. Respect the learner's CEFR level as a minimum: suggest items at that level or higher. Also respect IELTS mode, skill, and topic. If no relevant item exists, return an empty array. Focus terms may have directly related collocations, but do not recursively expand examples.`,
       input: JSON.stringify({ source: parsed.data.source, text, translation, direction: parsed.data.direction, focusTerm, options }),
       max_output_tokens: 4800,
       store: false,

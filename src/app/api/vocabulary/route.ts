@@ -79,9 +79,15 @@ export async function DELETE(request: NextRequest) {
   const session = await requireApiSession();
   if (!session) return apiError("Bạn cần đăng nhập.", 401);
   const id = request.nextUrl.searchParams.get("id");
-  if (!z.uuid().safeParse(id).success) return apiError("ID không hợp lệ.");
-  const { error } = await session.supabase.from("vocabulary_items")
-    .delete().eq("id", id).eq("user_id", session.user.id);
+  let body: unknown;
+  if (id !== null) body = { ids: [id] };
+  else {
+    try { body = await request.json(); } catch { return apiError("Dữ liệu không hợp lệ."); }
+  }
+  const parsed = z.object({ ids: z.array(z.uuid()).min(1).max(100) }).safeParse(body);
+  if (!parsed.success) return apiError("Chọn từ 1 đến 100 ID hợp lệ mỗi lần xóa.");
+  const { data, error } = await session.supabase.from("vocabulary_items")
+    .delete().in("id", [...new Set(parsed.data.ids)]).eq("user_id", session.user.id).select("id");
   if (error) return apiError("Không thể xóa mục từ.", 500);
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({ ok: true, deletedIds: (data ?? []).map((item) => item.id) });
 }

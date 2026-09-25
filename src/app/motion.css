@@ -1,0 +1,173 @@
+/* Interaction motion is kept after theme styles so transitions compose consistently.
+   No pointer listeners, permanent GPU layers, or animated layout/shadow properties. */
+:root {
+  --motion-press: 90ms;
+  --motion-hover: 160ms;
+  --motion-card: 220ms;
+  --motion-ease: cubic-bezier(.22, 1, .36, 1);
+  --interaction-tint: #78b82f12;
+  --interaction-edge: #78b82f66;
+  --interaction-shadow: #17220f0c;
+}
+
+html[data-theme="dark"] {
+  --interaction-tint: #adff4110;
+  --interaction-edge: #adff414d;
+  --interaction-shadow: #00000024;
+}
+
+/* Small controls retain their hit area and never move surrounding content. */
+:is(
+  .primary-button, .primary-small, .subtle-button, .study-button,
+  .sort-button, .google-button, .send-button, .icon-button,
+  .mobile-sidebar-trigger, .jump-to-latest, .text-button,
+  .card-actions button, .daily-item button, .collocation-action-list button,
+  .flashcard-rating button, .flashcard-hint-toggle, .focus-chip button,
+  .attachment-chip button, .notice button,
+  .nav-link, .history-link, .workspace-tabs button, .flashcard-filters button
+) {
+  transition:
+    translate var(--motion-hover) var(--motion-ease),
+    scale var(--motion-hover) var(--motion-ease),
+    background-color var(--motion-hover) ease,
+    border-color var(--motion-hover) ease,
+    color var(--motion-hover) ease;
+}
+
+/* A fixed border/shadow layer fades; the shadow itself is never interpolated. */
+:is(.vocab-card, .daily-item, .suggestion-card, .settings-card, .flashcard-practice, .flashcard-surface) {
+  position: relative;
+  transition:
+    translate var(--motion-card) var(--motion-ease),
+    scale var(--motion-card) var(--motion-ease),
+    background-color var(--motion-hover) ease,
+    color var(--motion-hover) ease,
+    border-color var(--motion-hover) ease;
+}
+
+:is(.vocab-card, .daily-item, .suggestion-card, .settings-card, .flashcard-practice, .flashcard-surface)::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border: 1px solid var(--interaction-edge);
+  border-radius: inherit;
+  box-shadow: 0 6px 18px var(--interaction-shadow);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--motion-card) ease;
+}
+
+:is(.vocab-card, .daily-item, .suggestion-card, .settings-card, .flashcard-practice):focus-within::after,
+.flashcard-surface:focus-visible::after {
+  opacity: 1;
+}
+
+.workspace-tabs button {
+  position: relative;
+}
+
+.workspace-tabs button.active {
+  border-bottom-color: transparent;
+}
+
+.workspace-tabs button::after {
+  content: "";
+  position: absolute;
+  inset: auto 3px -1px;
+  height: 2px;
+  border-radius: 2px;
+  background: currentColor;
+  transform: scaleX(.4);
+  opacity: 0;
+  pointer-events: none;
+  transition: transform var(--motion-hover) var(--motion-ease), opacity var(--motion-hover) ease;
+}
+
+.workspace-tabs button.active::after,
+.workspace-tabs button:focus-visible::after {
+  transform: scaleX(1);
+  opacity: 1;
+}
+
+/* Hover decoration is enabled only for a mouse/trackpad, avoiding sticky touch hover. */
+@media (hover: hover) and (pointer: fine) {
+  :is(.vocab-card, .daily-item, .suggestion-card, .settings-card, .flashcard-practice, .flashcard-surface):hover::after {
+    opacity: 1;
+  }
+
+  :is(.workspace-tabs button, .flashcard-filters button):not(.active):not(:disabled):hover {
+    background-color: var(--interaction-tint);
+  }
+
+  .workspace-tabs button:not(:disabled):hover::after {
+    transform: scaleX(1);
+    opacity: .55;
+  }
+
+  .workspace-tabs button.active:hover::after {
+    opacity: 1;
+  }
+
+  html[data-theme] :is(.primary-button, .primary-small, .send-button):not(:disabled):hover {
+    background-color: #baff62;
+    border-color: #baff62;
+    color: #151a10;
+  }
+}
+
+@media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
+  :is(
+    .primary-button, .primary-small, .subtle-button, .study-button,
+    .sort-button, .google-button, .send-button, .icon-button,
+    .mobile-sidebar-trigger, .jump-to-latest, .text-button,
+    .card-actions button, .daily-item button, .collocation-action-list button,
+    .flashcard-rating button, .flashcard-hint-toggle,
+    .workspace-tabs button, .flashcard-filters button
+  ):not(:disabled):not([aria-disabled="true"]):hover {
+    translate: 0 -1px;
+  }
+
+  :is(.nav-link, .history-link):not(:disabled):not([aria-disabled="true"]):hover {
+    translate: 2px 0;
+  }
+
+  /* Editable cards only receive the outline; text fields remain stationary. */
+  :is(.vocab-card, .daily-item):hover:not(:focus-within) {
+    translate: 0 -2px;
+  }
+
+  .flashcard-surface:not(:disabled):hover {
+    translate: 0 -2px;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  :is(
+    .primary-button, .primary-small, .subtle-button, .study-button,
+    .sort-button, .google-button, .send-button, .icon-button,
+    .mobile-sidebar-trigger, .jump-to-latest, .text-button,
+    .card-actions button, .daily-item button, .collocation-action-list button,
+    .flashcard-rating button, .flashcard-hint-toggle, .focus-chip button,
+    .attachment-chip button, .notice button,
+    .nav-link, .history-link, .workspace-tabs button, .flashcard-filters button
+  ):not(:disabled):not([aria-disabled="true"]):active {
+    translate: 0 0;
+    scale: .975;
+    transition-duration: var(--motion-press);
+  }
+
+  /* Individual translate/scale properties compose with the existing flip animation. */
+  .flashcard-surface:not(:disabled):active {
+    translate: 0 0;
+    scale: .995;
+    transition-duration: var(--motion-press);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workspace-tabs button::after {
+    transform: none;
+    transition: none;
+  }
+}

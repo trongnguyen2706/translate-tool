@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { PreferencesProvider } from "@/components/preferences-provider";
 import "./globals.css";
+import "./motion.css";
 
 export const metadata: Metadata = {
   title: "Phrasebook — Dịch và học từ",

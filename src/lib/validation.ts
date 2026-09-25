@@ -28,7 +28,12 @@ const vocabularyCoreSchema = z.object({
   example: z.string().trim().max(800),
   collocations: z.array(z.string().trim().max(120)).max(6)
 });
-export const suggestionSchema = vocabularyCoreSchema.extend(learningMetadataSchema.shape);
+export const aiTagsSchema = z.array(z.string().trim().min(1).max(40)).min(1).max(4)
+  .transform((tags) => [...new Set(tags.map((tag) => tag.toLowerCase()))]);
+export const suggestionSchema = vocabularyCoreSchema.extend({
+  ...learningMetadataSchema.shape,
+  tags: aiTagsSchema
+});
 export type Suggestion = z.infer<typeof suggestionSchema>;
 
 export const studyOptionsSchema = z.object({
