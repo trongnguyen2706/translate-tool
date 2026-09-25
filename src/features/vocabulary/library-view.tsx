@@ -1,7 +1,7 @@
 "use client";
 
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDownUp, BookOpen, Download, FileUp, Layers3, LoaderCircle, Plus, Search, Trash2, X } from "lucide-react";
+import { ArrowDownUp, BookOpen, Download, FileUp, Layers3, LoaderCircle, Plus, Search, Sparkles, Trash2, X } from "lucide-react";
 import { usePreferences } from "@/components/preferences-provider";
 import { cefrLevels, ieltsSkills, relevanceLabels, relevanceLabelsEn, skillLabels, topicKeys, topicLabels, topicLabelsEn } from "@/lib/learning";
 import type { Suggestion } from "@/lib/validation";
@@ -66,6 +66,11 @@ export function LibraryView() {
   const [notice, setNotice] = useState("");
   const [saving, setSaving] = useState(false);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const [tagging, setTagging] = useState(false);
+  const [tagProgress, setTagProgress] = useState({ processed: 0, total: 0, updated: 0 });
+  const [stoppingTags, setStoppingTags] = useState(false);
+  const stopTagsRef = useRef(false);
   const importRef = useRef<HTMLInputElement>(null);
   const csvImportRef = useRef<HTMLInputElement>(null);
 
@@ -77,11 +82,13 @@ export function LibraryView() {
     finally { setLoading(false); }
   }
   useEffect(() => {
+    stopTagsRef.current = false;
     fetch("/api/vocabulary", { cache: "no-store" })
       .then((response) => apiJson<{ items: Item[] }>(response))
       .then(({ items: result }) => setItems(result))
       .catch((err) => setError(err instanceof Error ? err.message : "Không thể tải kho từ."))
       .finally(() => setLoading(false));
+    return () => { stopTagsRef.current = true; };
   }, []);
 
   const visible = useMemo(() => items.filter((item) => {
@@ -95,11 +102,77 @@ export function LibraryView() {
     if (levelFilter !== "all" && (levelFilter === "unclassified" ? item.cefr_level !== null : item.cefr_level !== levelFilter)) return false;
     if (ieltsFilter !== "all" && (ieltsFilter === "unclassified" ? item.ielts_relevance !== null : item.ielts_relevance !== ieltsFilter)) return false;
     if (topicFilter !== "all" && !item.topics.includes(topicFilter as Suggestion["topics"][number])) return false;
-    if (tagFilter !== "all" && !(item.tags ?? []).includes(tagFilter)) return false;
+    if (tagFilter === "__untagged__" ? (item.tags ?? []).length > 0 : tagFilter !== "all" && !(item.tags ?? []).includes(tagFilter)) return false;
     return true;
   }).sort((a, b) => sort === "newest" ? b.created_at.localeCompare(a.created_at) : a.created_at.localeCompare(b.created_at)), [items, query, period, anchor, weekday, sort, levelFilter, ieltsFilter, topicFilter, tagFilter]);
 
   const allTags = useMemo(() => [...new Set(items.flatMap((item) => item.tags ?? []))].sort((a, b) => a.localeCompare(b, "vi")), [items]);
+  const untaggedCount = items.filter((item) => !(item.tags ?? []).length).length;
+  const selectedVisible = visible.filter((item) => selectedIds.has(item.id));
+  const actionsBusy = tagging || classifying || !!pendingAction;
+
+  function toggleSelection(id: string) {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  async function tagAllUntagged() {
+    if (actionsBusy) return;
+    const ids = items.filter((item) => !(item.tags ?? []).length).map((item) => item.id);
+    if (!ids.length) return;
+    stopTagsRef.current = false;
+    setTagging(true); setStoppingTags(false); setError(""); setNotice("");
+    setTagProgress({ processed: 0, total: ids.length, updated: 0 });
+    let updated = 0;
+    try {
+      for (let offset = 0; offset < ids.length && !stopTagsRef.current; offset += 10) {
+        const batch = ids.slice(offset, offset + 10);
+        const response = await fetch("/api/vocabulary/tags", {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids: batch })
+        });
+        const result = await response.json() as { items?: Pick<Item, "id" | "tags" | "updated_at">[]; error?: string };
+        const saved = new Map((result.items ?? []).map((item) => [item.id, item]));
+        updated += saved.size;
+        setItems((current) => current.map((item) => saved.has(item.id) ? { ...item, ...saved.get(item.id)! } : item));
+        setTagProgress({ processed: Math.min(offset + batch.length, ids.length), total: ids.length, updated });
+        if (!response.ok) throw new Error(result.error || t("Không thể gắn tag.", "Could not add tags."));
+      }
+      setNotice(stopTagsRef.current
+        ? t(`Đã dừng. Đã lưu tag cho ${updated} từ; bấm gắn tag để tiếp tục các từ còn thiếu.`, `Stopped. Saved tags for ${updated} words; run again to continue with untagged words.`)
+        : t(`Đã gắn tag cho ${updated} từ. Từ đã được sửa hoặc gắn tag trong lúc chạy sẽ được bỏ qua.`, `Added tags to ${updated} words. Words edited or tagged during the run were skipped.`));
+    } catch (err) {
+      setError(t(`Đã lưu tag cho ${updated} từ. `, `Saved tags for ${updated} words. `) + (err instanceof Error ? err.message : t("Không thể tiếp tục.", "Could not continue.")));
+    } finally { setTagging(false); setStoppingTags(false); await load(); }
+  }
+
+  async function removeSelected() {
+    if (actionsBusy || !selectedVisible.length) return;
+    const ids = selectedVisible.map((item) => item.id);
+    if (!window.confirm(t(
+      `Xóa ${ids.length} từ đã chọn đang hiển thị? Flashcard và mục trong bộ học ngày liên quan cũng sẽ bị xóa. Không thể hoàn tác.`,
+      `Delete ${ids.length} selected visible words? Linked flashcards and daily study entries will also be deleted. This cannot be undone.`
+    ))) return;
+    setPendingAction("bulk-delete"); setError(""); setNotice("");
+    let deleted = 0;
+    try {
+      for (let offset = 0; offset < ids.length; offset += 100) {
+        const batch = ids.slice(offset, offset + 100);
+        const result = await apiJson<{ deletedIds: string[] }>(await fetch("/api/vocabulary", {
+          method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids: batch })
+        }));
+        deleted += result.deletedIds.length;
+        const removed = new Set(result.deletedIds);
+        setItems((current) => current.filter((item) => !removed.has(item.id)));
+        setSelectedIds((current) => new Set([...current].filter((id) => !removed.has(id))));
+        setNotice(t(`Đã xóa ${deleted}/${ids.length} từ.`, `Deleted ${deleted}/${ids.length} words.`));
+      }
+    } catch (err) {
+      setError(t(`Đã xóa ${deleted} từ. `, `Deleted ${deleted} words. `) + (err instanceof Error ? err.message : t("Không thể xóa các từ còn lại.", "Could not delete the remaining words.")));
+    } finally { setPendingAction(null); await load(); }
+  }
 
   const groups = useMemo(() => {
     const result: { title: string; items: Item[] }[] = [];
@@ -142,6 +215,7 @@ export function LibraryView() {
   }
 
   async function remove(id: string) {
+    if (actionsBusy) return;
     if (!window.confirm(t("Xóa mục từ này khỏi kho?", "Remove this item from your vocabulary?"))) return;
     setPendingAction(`delete:${id}`); setError("");
     try {
@@ -153,7 +227,7 @@ export function LibraryView() {
   }
 
   async function classify(ids: string[]) {
-    if (!ids.length || classifying) return;
+    if (!ids.length || actionsBusy) return;
     setClassifying(true); setError(""); setNotice("");
     try {
       const result = await apiJson<{ updated: number }>(await fetch("/api/vocabulary/classify", {
@@ -165,7 +239,7 @@ export function LibraryView() {
   }
 
   async function addFlashcard(id: string) {
-    if (pendingAction) return;
+    if (actionsBusy) return;
     setPendingAction(`flashcard:${id}`);
     setError(""); setNotice("");
     try {
@@ -179,6 +253,7 @@ export function LibraryView() {
   }
 
   async function importFile(event: ChangeEvent<HTMLInputElement>, format: "json" | "csv") {
+    if (actionsBusy) return;
     const file = event.target.files?.[0];
     if (!file) return;
     if (file.size > 2_000_000) { setError(t("Tệp nhập tối đa 2 MB.", "The import file must be 2 MB or smaller.")); event.target.value = ""; return; }
@@ -199,7 +274,7 @@ export function LibraryView() {
   }
 
   return <main className="library-page"><div className="page-container">
-    <div className="page-heading"><div><span className="eyebrow">{t("Học theo ngữ cảnh", "Learn in context")}</span><h1>{t("Kho từ của bạn", "Your vocabulary")}</h1><p>{t(`${items.length} từ và cụm từ đã lưu`, `${items.length} saved words and phrases`)}</p></div><button className="primary-button" onClick={() => startEdit()}><Plus size={18} /> {t("Thêm từ", "Add word")}</button></div>
+    <div className="page-heading"><div><span className="eyebrow">{t("Học theo ngữ cảnh", "Learn in context")}</span><h1>{t("Kho từ của bạn", "Your vocabulary")}</h1><p>{t(`${items.length} từ và cụm từ đã lưu`, `${items.length} saved words and phrases`)}</p></div><button className="primary-button" disabled={actionsBusy} onClick={() => startEdit()}><Plus size={18} /> {t("Thêm từ", "Add word")}</button></div>
 
     <div className="library-toolbar">
       <label className="search-box"><Search size={18} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("Tìm từ, nghĩa hoặc collocation", "Search words, meanings or collocations")} aria-label={t("Tìm trong kho từ", "Search vocabulary")} /></label>
@@ -210,29 +285,45 @@ export function LibraryView() {
         <select aria-label={t("Lọc trình độ", "Filter by level")} value={levelFilter} onChange={(event) => setLevelFilter(event.target.value)}><option value="all">{t("Mọi level", "Any level")}</option><option value="unclassified">{t("Chưa rõ level", "Unknown level")}</option>{cefrLevels.map((level) => <option key={level}>{level}</option>)}</select>
         <select aria-label={t("Lọc IELTS", "Filter by IELTS priority")} value={ieltsFilter} onChange={(event) => setIeltsFilter(event.target.value)}><option value="all">{t("Mọi mức IELTS", "Any IELTS priority")}</option><option value="unclassified">{t("Chưa rõ IELTS", "IELTS not classified")}</option>{Object.entries(relevance).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select>
         <select aria-label={t("Lọc lĩnh vực", "Filter by topic")} value={topicFilter} onChange={(event) => setTopicFilter(event.target.value)}><option value="all">{t("Mọi lĩnh vực", "Any topic")}</option>{topicKeys.map((topic) => <option key={topic} value={topic}>{topics[topic]}</option>)}</select>
-        <select aria-label={t("Lọc tag", "Filter by tag")} value={tagFilter} onChange={(event) => setTagFilter(event.target.value)}><option value="all">{t("Mọi tag", "Any tag")}</option>{allTags.map((tag) => <option key={tag} value={tag}>{tag}</option>)}</select>
+        <select aria-label={t("Lọc tag", "Filter by tag")} value={tagFilter} onChange={(event) => setTagFilter(event.target.value)}><option value="all">{t("Mọi tag", "Any tag")}</option><option value="__untagged__">{t("Chưa có tag", "Without tags")}</option>{allTags.map((tag) => <option key={tag} value={tag}>{tag}</option>)}</select>
         <button className="sort-button" onClick={() => setSort(sort === "newest" ? "oldest" : "newest")}><ArrowDownUp size={16} /> {sort === "newest" ? t("Mới nhất", "Newest") : t("Cũ nhất", "Oldest")}</button>
       </div>
-      <button type="button" className="subtle-button" disabled={classifying || !items.some((item) => item.source_language === "en" && (!item.cefr_level || !item.ielts_relevance))} onClick={() => classify(items.filter((item) => item.source_language === "en" && (!item.cefr_level || !item.ielts_relevance)).slice(0, 10).map((item) => item.id))}>{classifying && <LoaderCircle size={16} className="spin" />}{classifying ? t("Đang phân loại…", "Classifying…") : t("Phân loại 10 từ chưa có nhãn · 1 lượt AI", "Classify 10 unlabeled words · 1 AI request")}</button>
+      <div className="library-ai-actions">
+        <button type="button" className="subtle-button" disabled={actionsBusy || !items.some((item) => item.source_language === "en" && (!item.cefr_level || !item.ielts_relevance))} onClick={() => classify(items.filter((item) => item.source_language === "en" && (!item.cefr_level || !item.ielts_relevance)).slice(0, 10).map((item) => item.id))}>{classifying && <LoaderCircle size={16} className="spin" />}{classifying ? t("Đang phân loại…", "Classifying…") : t("Phân loại 10 từ chưa có nhãn · 1 lượt AI", "Classify 10 unlabeled words · 1 AI request")}</button>
+        <button type="button" className="subtle-button" disabled={loading || actionsBusy || !untaggedCount} onClick={tagAllUntagged}><Sparkles size={16} />{t(`Tự gắn tag AI · ${untaggedCount} từ chưa có tag`, `Auto-tag with AI · ${untaggedCount} untagged words`)}</button>
+        <small>{t("Áp dụng toàn kho · tối đa 10 từ/lượt AI · tự lưu tag.", "Entire library · up to 10 words per AI request · tags saved automatically.")}</small>
+      </div>
+      {tagging && <div className="tagging-progress">
+        <div role="status" aria-live="polite"><LoaderCircle size={16} className="spin" /><span>{t(`Đã xử lý ${tagProgress.processed}/${tagProgress.total} từ · đã lưu tag cho ${tagProgress.updated} từ`, `Processed ${tagProgress.processed}/${tagProgress.total} words · tagged ${tagProgress.updated}`)}</span></div>
+        <progress value={tagProgress.processed} max={tagProgress.total || 1} aria-label={t("Tiến độ gắn tag", "Tagging progress")} />
+        <button type="button" className="subtle-button" disabled={stoppingTags} onClick={() => { stopTagsRef.current = true; setStoppingTags(true); }}>{stoppingTags ? t("Đang hoàn thành lô hiện tại…", "Finishing current batch…") : t("Dừng sau lô này", "Stop after this batch")}</button>
+      </div>}
     </div>
 
-    {(error || notice) && <div className={`notice ${error ? "error" : "success"}`}>{error && language === "en" ? "Could not complete the request. Check your data and database migrations." : error || notice}<button onClick={() => { setError(""); setNotice(""); }} aria-label={t("Đóng thông báo", "Dismiss message")}><X size={16} /></button></div>}
+    {(error || notice) && <div role={error ? "alert" : "status"} className={`notice ${error ? "error" : "success"}`}>{error || notice}<button onClick={() => { setError(""); setNotice(""); }} aria-label={t("Đóng thông báo", "Dismiss message")}><X size={16} /></button></div>}
 
-    {loading ? <div className="empty-state" role="status"><LoaderCircle size={26} className="spin" /><h2>{t("Đang tải kho từ…", "Loading vocabulary…")}</h2></div> : visible.length === 0 ? <div className="empty-state"><BookOpen size={28} /><h2>{items.length ? t("Không có mục nào khớp bộ lọc", "No items match these filters") : t("Kho từ đang trống", "Your vocabulary is empty")}</h2><p>{items.length ? t("Thử đổi từ khóa hoặc khoảng thời gian.", "Try another search or time range.") : t("Dịch một đoạn văn rồi lưu từ được gợi ý, hoặc thêm từ thủ công.", "Translate a passage and save suggestions, or add a word manually.")}</p></div> : groups.map((group) => <section className="vocab-group" key={group.title}><h2>{group.title}<span>{group.items.length}</span></h2><div className="vocab-grid">{group.items.map((item) => <article className="vocab-card" key={item.id}>
-      <div className="vocab-card-top"><span className="type-pill">{item.kind === "phrase" ? t("Cụm từ", "Phrase") : t("Từ", "Word")}</span><span className="card-date">{localDate(item.created_at)}</span></div>
+    {!loading && visible.length > 0 && <div className="library-bulk-actions" aria-label={t("Thao tác hàng loạt", "Bulk actions")}>
+      <label className="vocab-select"><input type="checkbox" checked={selectedVisible.length === visible.length} ref={(node) => { if (node) node.indeterminate = selectedVisible.length > 0 && selectedVisible.length < visible.length; }} disabled={actionsBusy} onChange={(event) => setSelectedIds(event.target.checked ? new Set(visible.map((item) => item.id)) : new Set())} />{t(`Chọn tất cả ${visible.length} từ đang hiển thị`, `Select all ${visible.length} visible words`)}</label>
+      <span>{t(`Đã chọn ${selectedVisible.length} từ đang hiển thị`, `${selectedVisible.length} visible words selected`)}</span>
+      {selectedIds.size > 0 && <button type="button" className="subtle-button" disabled={actionsBusy} onClick={() => setSelectedIds(new Set())}>{t("Bỏ chọn", "Clear selection")}</button>}
+      <button type="button" className="subtle-button danger" disabled={actionsBusy || !selectedVisible.length} onClick={removeSelected}>{pendingAction === "bulk-delete" ? <LoaderCircle size={16} className="spin" /> : <Trash2 size={16} />}{pendingAction === "bulk-delete" ? t("Đang xóa…", "Deleting…") : t(`Xóa đã chọn (${selectedVisible.length})`, `Delete selected (${selectedVisible.length})`)}</button>
+    </div>}
+
+    {loading ? <div className="empty-state" role="status"><LoaderCircle size={26} className="spin" /><h2>{t("Đang tải kho từ…", "Loading vocabulary…")}</h2></div> : visible.length === 0 ? <div className="empty-state"><BookOpen size={28} /><h2>{items.length ? t("Không có mục nào khớp bộ lọc", "No items match these filters") : t("Kho từ đang trống", "Your vocabulary is empty")}</h2><p>{items.length ? t("Thử đổi từ khóa hoặc khoảng thời gian.", "Try another search or time range.") : t("Dịch một đoạn văn rồi lưu từ được gợi ý, hoặc thêm từ thủ công.", "Translate a passage and save suggestions, or add a word manually.")}</p></div> : groups.map((group) => <section className="vocab-group" key={group.title}><h2>{group.title}<span>{group.items.length}</span></h2><div className="vocab-grid">{group.items.map((item) => <article className="vocab-card" data-selected={selectedIds.has(item.id)} key={item.id}>
+      <div className="vocab-card-top"><label className="vocab-select"><input type="checkbox" checked={selectedIds.has(item.id)} onChange={() => toggleSelection(item.id)} disabled={actionsBusy} aria-label={t(`Chọn ${item.term}`, `Select ${item.term}`)} /><span className="type-pill">{item.kind === "phrase" ? t("Cụm từ", "Phrase") : t("Từ", "Word")}</span></label><span className="card-date">{localDate(item.created_at)}</span></div>
       <h3>{item.term}</h3>
       {item.meaning_vi && <p className="meaning">{item.meaning_vi}</p>}
       {item.meaning_en && <p className="meaning-en">{item.meaning_en}</p>}
       {item.example && <p className="example">“{item.example}”</p>}
-      <div className="learning-tags">{item.cefr_level && <span>{item.cefr_level}</span>}{item.ielts_relevance && <span>{relevance[item.ielts_relevance]}</span>}{item.ielts_skills.map((skill) => <span key={skill}>{skillLabels[skill]}</span>)}{item.topics.map((topic) => <span key={topic}>{topics[topic]}</span>)}{(item.tags ?? []).map((tag) => <span key={tag}>#{tag}</span>)}</div>
+      <div className="learning-tags">{item.cefr_level && <span>{item.cefr_level}</span>}{item.ielts_relevance && <span>{relevance[item.ielts_relevance]}</span>}{item.ielts_skills.map((skill) => <span key={skill}>{skillLabels[skill]}</span>)}{item.topics.map((topic) => <span key={topic}>{topics[topic]}</span>)}{(item.tags ?? []).map((tag) => <span key={`tag:${tag}`}>#{tag}</span>)}</div>
       {item.learning_reason && <p className="learning-reason">{item.learning_reason}</p>}
       {item.collocations.length > 0 && <div className="collocation-list">{item.collocations.map((collocation) => <span key={collocation}>{collocation}</span>)}</div>}
       {item.note && <p className="note-line">{item.note}</p>}
       {item.source_text && <details className="source-details"><summary>{t("Xem câu nguồn", "View source sentence")}</summary><p>{item.source_text}</p></details>}
-      <div className="card-actions"><button onClick={() => startEdit(item)}>{t("Chỉnh sửa", "Edit")}</button><button onClick={() => addFlashcard(item.id)} disabled={!!pendingAction}>{pendingAction === `flashcard:${item.id}` ? <LoaderCircle size={14} className="spin" /> : <Layers3 size={14} />} Flashcard</button><button onClick={() => classify([item.id])} disabled={classifying || item.source_language !== "en"}>{classifying ? <LoaderCircle size={14} className="spin" /> : null} {t("Gợi ý nhãn AI", "Suggest AI labels")}</button><button onClick={() => remove(item.id)} className="danger" aria-label={t(`Xóa ${item.term}`, `Delete ${item.term}`)} disabled={!!pendingAction}>{pendingAction === `delete:${item.id}` ? <LoaderCircle size={16} className="spin" /> : <Trash2 size={16} />}</button></div>
+      <div className="card-actions"><button disabled={actionsBusy} onClick={() => startEdit(item)}>{t("Chỉnh sửa", "Edit")}</button><button onClick={() => addFlashcard(item.id)} disabled={actionsBusy}>{pendingAction === `flashcard:${item.id}` ? <LoaderCircle size={14} className="spin" /> : <Layers3 size={14} />} Flashcard</button><button onClick={() => classify([item.id])} disabled={actionsBusy || item.source_language !== "en"}>{classifying ? <LoaderCircle size={14} className="spin" /> : null} {t("Gợi ý nhãn AI", "Suggest AI labels")}</button><button onClick={() => remove(item.id)} className="danger" aria-label={t(`Xóa ${item.term}`, `Delete ${item.term}`)} disabled={actionsBusy}>{pendingAction === `delete:${item.id}` ? <LoaderCircle size={16} className="spin" /> : <Trash2 size={16} />}</button></div>
     </article>)}</div></section>)}
 
-    <div className="data-actions"><span>{t("Dữ liệu của bạn", "Your data")}</span><div><a className="subtle-button" href="/api/export?format=json"><Download size={16} /> {t("Xuất JSON", "Export JSON")}</a><a className="subtle-button" href="/api/export?format=csv"><Download size={16} /> {t("Xuất CSV", "Export CSV")}</a><a className="subtle-button" href="/api/export?format=csv&sample=1"><Download size={16} /> {t("CSV mẫu", "Sample CSV")}</a><input ref={importRef} type="file" accept="application/json,.json" hidden onChange={(event) => importFile(event, "json")} /><button className="subtle-button" onClick={() => importRef.current?.click()} disabled={pendingAction?.startsWith("import:")}>{pendingAction === "import:json" ? <LoaderCircle size={16} className="spin" /> : <FileUp size={16} />}{pendingAction === "import:json" ? t("Đang nhập…", "Importing…") : t("Nhập JSON", "Import JSON")}</button><input ref={csvImportRef} type="file" accept="text/csv,.csv" hidden onChange={(event) => importFile(event, "csv")} /><button className="subtle-button" onClick={() => csvImportRef.current?.click()} disabled={pendingAction?.startsWith("import:")}>{pendingAction === "import:csv" ? <LoaderCircle size={16} className="spin" /> : <FileUp size={16} />}{pendingAction === "import:csv" ? t("Đang nhập…", "Importing…") : t("Nhập CSV", "Import CSV")}</button></div></div>
+    <div className="data-actions"><span>{t("Dữ liệu của bạn", "Your data")}</span><div><a className="subtle-button" href="/api/export?format=json"><Download size={16} /> {t("Xuất JSON", "Export JSON")}</a><a className="subtle-button" href="/api/export?format=csv"><Download size={16} /> {t("Xuất CSV", "Export CSV")}</a><a className="subtle-button" href="/api/export?format=csv&sample=1"><Download size={16} /> {t("CSV mẫu", "Sample CSV")}</a><input ref={importRef} type="file" accept="application/json,.json" hidden onChange={(event) => importFile(event, "json")} /><button className="subtle-button" onClick={() => importRef.current?.click()} disabled={actionsBusy}>{pendingAction === "import:json" ? <LoaderCircle size={16} className="spin" /> : <FileUp size={16} />}{pendingAction === "import:json" ? t("Đang nhập…", "Importing…") : t("Nhập JSON", "Import JSON")}</button><input ref={csvImportRef} type="file" accept="text/csv,.csv" hidden onChange={(event) => importFile(event, "csv")} /><button className="subtle-button" onClick={() => csvImportRef.current?.click()} disabled={actionsBusy}>{pendingAction === "import:csv" ? <LoaderCircle size={16} className="spin" /> : <FileUp size={16} />}{pendingAction === "import:csv" ? t("Đang nhập…", "Importing…") : t("Nhập CSV", "Import CSV")}</button></div></div>
     <p className="import-hint">{t("CSV chỉ nhập kho từ. Tải CSV mẫu để xem tên cột; nhiều collocation, kỹ năng, lĩnh vực và tag trong một ô cách nhau bằng dấu chấm phẩy (;). Từ nhập được gắn tag “Đã nhập”. Tệp tối đa 2 MB.", "CSV imports vocabulary only. Download the sample for column names; separate multiple values with semicolons (;). Imported words receive the Imported tag. Maximum file size: 2 MB.")}</p>
   </div>
 

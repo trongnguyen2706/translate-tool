@@ -9,9 +9,6 @@ import { usePreferences } from "@/components/preferences-provider";
 
 type Translation = { id: string; source_text: string; translated_text: string; direction: Direction; created_at: string };
 type Draft = Suggestion & { status: "pending" | "saved" | "dismissed"; id: string; savedRecordId?: string; alreadyExisted?: boolean };
-type DailyUsage = { used: number; limit: number; remaining: number };
-type UsageSummary = { translation: DailyUsage; suggestion: DailyUsage };
-type ApiCost = { inputTokens: number; outputTokens: number; estimatedCostUsd: number | null; model: string };
 
 const directions: { value: Direction; label: string }[] = [
   { value: "en-vi", label: "Anh → Việt" },
@@ -50,9 +47,6 @@ export function ChatWorkspace({ historyId }: { historyId?: string }) {
   const [imageName, setImageName] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [usage, setUsage] = useState<UsageSummary | null>(null);
-  const [usageFailed, setUsageFailed] = useState(false);
-  const [lastCosts, setLastCosts] = useState<{ translation?: ApiCost; suggestion?: ApiCost }>({});
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const translationScrollRef = useRef<HTMLDivElement>(null);
@@ -70,18 +64,10 @@ export function ChatWorkspace({ historyId }: { historyId?: string }) {
     return () => { cancelAnimationFrame(frame); window.removeEventListener("resize", updateJumpButton); };
   }, [text, translation, activePane, updateJumpButton]);
 
-  const refreshUsage = useCallback(async () => {
-    try {
-      const { usage: latest } = await readApi<{ usage: UsageSummary }>(await fetch("/api/usage", { cache: "no-store" }));
-      setUsage(latest);
-      setUsageFailed(false);
-    } catch { setUsage(null); setUsageFailed(true); }
-  }, []);
-
   const reset = useCallback(() => {
     setText(""); setDraftText(""); setTranslation(""); setDrafts([]); setFocusTerm("");
     setActivePane("translation"); setSuggestionSource("translation"); setShowJumpToLatest(false);
-    setSavedTranslationId(null); setImageName(""); setError(""); setNotice(""); setLastCosts({});
+    setSavedTranslationId(null); setImageName(""); setError(""); setNotice("");
     inputRef.current?.focus();
   }, []);
 
@@ -98,18 +84,13 @@ export function ChatWorkspace({ historyId }: { historyId?: string }) {
   }, []);
 
   useEffect(() => {
-    const frame = requestAnimationFrame(() => { void refreshUsage(); });
-    return () => cancelAnimationFrame(frame);
-  }, [refreshUsage]);
-
-  useEffect(() => {
     if (!historyId) return;
     fetch("/api/translations", { cache: "no-store" }).then((res) => readApi<{ items: Translation[] }>(res))
       .then(({ items }) => {
         const item = items.find((entry) => entry.id === historyId);
         if (!item) { setError(t("Không tìm thấy bản dịch đã lưu.", "Saved translation not found.")); return; }
         setText(item.source_text); setDraftText(""); setDirection(item.direction); setResultDirection(item.direction); setTranslation(item.translated_text); setActivePane("translation");
-        setSavedTranslationId(item.id); setDrafts([]); setFocusTerm(""); setNotice(""); setError(""); setLastCosts({});
+        setSavedTranslationId(item.id); setDrafts([]); setFocusTerm(""); setNotice(""); setError("");
       }).catch((err) => setError(err.message));
   }, [historyId, t]);
 
@@ -166,15 +147,13 @@ export function ChatWorkspace({ historyId }: { historyId?: string }) {
     const source = draftText.trim();
     const selectedDirection = direction;
     setText(source); setDraftText(""); setImageName(""); setResultDirection(selectedDirection); setActivePane("translation"); setSuggestionSource("translation");
-    setBusy("translate"); setError(""); setNotice(""); setDrafts([]); setTranslation(""); setSavedTranslationId(null); setLastCosts({});
+    setBusy("translate"); setError(""); setNotice(""); setDrafts([]); setTranslation(""); setSavedTranslationId(null);
     try {
-      const { translation: result, usage: callUsage } = await readApi<{ translation: string; usage: ApiCost }>(await fetch("/api/translate", {
+      const { translation: result } = await readApi<{ translation: string }>(await fetch("/api/translate", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: source, direction: selectedDirection })
       }));
       setTranslation(result);
-      setLastCosts({ translation: callUsage });
-      void refreshUsage();
       if (!approveBeforeSave) await runSuggestions(source, result, selectedDirection, "translation");
     } catch (err) { setDraftText((current) => current || source); setError(err instanceof Error ? err.message : "Không thể dịch."); }
     finally { setBusy(null); }
@@ -203,7 +182,7 @@ export function ChatWorkspace({ historyId }: { historyId?: string }) {
         collocations: item.collocations, source_text: source,
         source_language: "en", note: "", cefr_level: item.cefr_level,
         ielts_relevance: item.ielts_relevance, ielts_skills: item.ielts_skills,
-        topics: item.topics, learning_reason: item.learning_reason
+        topics: item.topics, tags: item.tags, learning_reason: item.learning_reason
       })
     }));
     setDrafts((current) => current.map((draft) => draft.id === item.id ? { ...draft, status: "saved", savedRecordId: savedItem.id, alreadyExisted: already_existed } : draft));
@@ -231,12 +210,10 @@ export function ChatWorkspace({ historyId }: { historyId?: string }) {
   async function runSuggestions(source: string, translated: string, selectedDirection: Direction, sourceMode: "translation" | "study", selectedTerm = "", append = false) {
     setBusy("suggest"); setError(""); setNotice("");
     try {
-      const { items, usage: callUsage } = await readApi<{ items: Suggestion[]; usage: ApiCost }>(await fetch("/api/suggestions", {
+      const { items } = await readApi<{ items: Suggestion[] }>(await fetch("/api/suggestions", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ source: sourceMode, text: source, ...(sourceMode === "translation" ? { translation: translated } : {}), direction: selectedDirection, options: studyOptions, ...(selectedTerm ? { focusTerm: selectedTerm } : {}) })
       }));
-      setLastCosts((current) => ({ ...current, suggestion: callUsage }));
-      void refreshUsage();
       const newDrafts: Draft[] = items.map((item, index) => ({ ...item, status: "pending", id: `${Date.now()}-${index}` }));
       setDrafts((current) => append ? [...current, ...newDrafts] : newDrafts);
       if (sourceMode === "translation" && !approveBeforeSave) {
@@ -262,7 +239,7 @@ export function ChatWorkspace({ historyId }: { historyId?: string }) {
     const source = draftText.trim();
     setText(source); setDraftText(""); setTranslation(""); setSavedTranslationId(null);
     setResultDirection(direction); setSuggestionSource("study"); setActivePane("suggestions");
-    setDrafts([]); setFocusTerm(""); setImageName(""); setLastCosts({});
+    setDrafts([]); setFocusTerm(""); setImageName("");
     const succeeded = await runSuggestions(source, "", direction, "study");
     if (!succeeded) setDraftText((current) => current || source);
   }
@@ -310,7 +287,10 @@ export function ChatWorkspace({ historyId }: { historyId?: string }) {
         </div>
         {(translation || busy === "translate") && <section className="translation-block" onMouseUp={captureSelection}>
           <div className="block-label">{t("Bản dịch", "Translation")}</div>
-          {busy === "translate" ? <div className="loading-line"><LoaderCircle size={18} className="spin" /> {t("Đang dịch…", "Translating…")}</div> : <p>{translation}</p>}
+          {busy === "translate" ? <div className="translation-skeleton" role="status" aria-label={t("Đang dịch", "Translating")}>
+            <div className="translation-skeleton-status"><LoaderCircle size={16} className="spin" /><span>{t("Đang dịch…", "Translating…")}</span></div>
+            <span className="skeleton-line wide" /><span className="skeleton-line medium" /><span className="skeleton-line short" />
+          </div> : <p className="result-reveal">{translation}</p>}
           {translation && <div className="result-actions">
             <button className="subtle-button" onClick={saveTranslation} disabled={!!savedTranslationId || !!busy}>{busy === "save" ? <LoaderCircle size={16} className="spin" /> : savedTranslationId ? <Check size={16} /> : <Save size={16} />}{busy === "save" ? t("Đang lưu…", "Saving…") : savedTranslationId ? t("Đã lưu", "Saved") : t("Lưu bản dịch", "Save translation")}</button>
             <button className="subtle-button" onClick={() => suggest()} disabled={!!busy}>{busy === "suggest" ? <LoaderCircle size={16} className="spin" /> : <Sparkles size={16} />}{busy === "suggest" ? t("Đang gợi ý…", "Finding words…") : focusTerm ? t(`Gợi ý: ${focusTerm}`, `Suggest: ${focusTerm}`) : t("Gợi ý từ vựng", "Suggest vocabulary")}</button>
@@ -324,8 +304,12 @@ export function ChatWorkspace({ historyId }: { historyId?: string }) {
         </div>
 
         <section className={`suggestions-section ${activePane !== "suggestions" ? "is-mobile-hidden" : ""}`}>
-          <div className="section-heading"><div><span className="eyebrow">{t("Kho từ cá nhân", "Personal vocabulary")}</span><h2>{t("Gợi ý để học", "Study suggestions")}</h2></div><span className="section-hint">{suggestionSource === "study" || approveBeforeSave ? t("Duyệt từng mục trước khi lưu", "Review each item before saving") : t("Tự gợi ý và lưu sau khi dịch", "Suggest and save after translation")}</span></div>
-          {busy === "suggest" && <div className="loading-line"><LoaderCircle size={18} className="spin" /> {t("Đang tìm từ và cụm từ…", "Finding words and phrases…")}</div>}
+          <div className="section-heading"><div><span className="eyebrow">{t("Kho từ cá nhân", "Personal vocabulary")}</span><h2>{t("Gợi ý để học", "Study suggestions")}</h2></div></div>
+          {busy === "suggest" && <div className="suggestion-loading" role="status" aria-label={t("Đang tìm từ và cụm từ", "Finding words and phrases")}>
+            <div className="translation-skeleton-status"><LoaderCircle size={16} className="spin" /><span>{t("Đang tìm từ và cụm từ…", "Finding words and phrases…")}</span></div>
+            <div className="suggestion-skeleton-card"><span className="skeleton-line short" /><span className="skeleton-line wide" /><span className="skeleton-line medium" /></div>
+            <div className="suggestion-skeleton-card"><span className="skeleton-line short" /><span className="skeleton-line medium" /></div>
+          </div>}
           {busy !== "suggest" && drafts.length === 0 && <p className="suggestions-empty">{suggestionSource === "study" ? t("Chưa có từ phù hợp. Thử đổi bộ lọc hoặc nhập đoạn khác.", "No suitable words yet. Change the filters or try another passage.") : approveBeforeSave ? t("Dịch xong, nhấn Gợi ý từ vựng để xem từ và cụm từ ở đây.", "After translating, select Suggest vocabulary to see words and phrases here.") : t("Sau khi dịch, từ và cụm từ được gợi ý rồi lưu tự động ở đây.", "Suggested words and phrases will be saved here automatically after translation.")}</p>}
           <div className="suggestion-list">{drafts.filter((item) => item.status !== "dismissed").map((item) => <article className="suggestion-card" key={item.id}>
             <div className="suggestion-top"><span className="type-pill">{item.kind === "phrase" ? t("Cụm từ", "Phrase") : t("Từ", "Word")}</span><span className={`status ${item.status}`}>{item.status === "saved" ? t("Đã lưu", "Saved") : t("Chờ duyệt", "Pending review")}</span></div>
@@ -335,6 +319,7 @@ export function ChatWorkspace({ historyId }: { historyId?: string }) {
             <label className="field-label">Collocations <small>{t("(cách nhau bằng dấu phẩy)", "(comma separated)")}</small><input value={item.collocations.join(", ")} onChange={(event) => updateDraft(item.id, "collocations", event.target.value.split(",").map((part) => part.trim()).filter(Boolean))} disabled={item.status === "saved"} /></label>
             <div className="learning-fields"><label>{t("Trình độ", "Level")}<select value={item.cefr_level ?? ""} onChange={(event) => updateDraft(item.id, "cefr_level", event.target.value ? event.target.value as Suggestion["cefr_level"] : null)} disabled={item.status === "saved"}><option value="">{t("Chưa rõ", "Unknown")}</option>{cefrLevels.map((level) => <option key={level}>{level}</option>)}</select></label><label>{t("Mức ưu tiên IELTS", "IELTS priority")}<select value={item.ielts_relevance ?? ""} onChange={(event) => updateDraft(item.id, "ielts_relevance", event.target.value ? event.target.value as Suggestion["ielts_relevance"] : null)} disabled={item.status === "saved"}><option value="">{t("Chưa rõ", "Unknown")}</option>{Object.entries(relevance).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label></div>
             <div className="learning-fields"><label>{t("Lĩnh vực", "Topic")}<select value="" onChange={(event) => { const topic = event.target.value as Suggestion["topics"][number]; updateDraft(item.id, "topics", item.topics.includes(topic) ? item.topics.filter((entry) => entry !== topic) : [...item.topics, topic].slice(0, 4)); }} disabled={item.status === "saved"}><option value="">{item.topics.length ? item.topics.map((topic) => topics[topic]).join(", ") : t("Chọn lĩnh vực", "Choose topic")}</option>{topicKeys.map((topic) => <option key={topic} value={topic}>{item.topics.includes(topic) ? "✓ " : ""}{topics[topic]}</option>)}</select></label><label>{t("Kỹ năng IELTS", "IELTS skill")}<select value="" onChange={(event) => { const skill = event.target.value as Suggestion["ielts_skills"][number]; updateDraft(item.id, "ielts_skills", item.ielts_skills.includes(skill) ? item.ielts_skills.filter((entry) => entry !== skill) : [...item.ielts_skills, skill]); }} disabled={item.status === "saved"}><option value="">{item.ielts_skills.length ? item.ielts_skills.map((skill) => skillLabels[skill]).join(", ") : t("Chọn kỹ năng", "Choose skill")}</option>{ieltsSkills.map((skill) => <option key={skill} value={skill}>{item.ielts_skills.includes(skill) ? "✓ " : ""}{skillLabels[skill]}</option>)}</select></label></div>
+            <div className="suggestion-ai-tags"><span className="field-label">{t("Tag AI · lưu cùng từ", "AI tags · saved with word")}</span><div className="learning-tags">{(item.tags ?? []).map((tag) => <span key={tag}>#{tag}</span>)}</div></div>
             <label className="field-label">{t("Lý do gợi ý", "Reason for suggestion")}<input value={item.learning_reason} onChange={(event) => updateDraft(item.id, "learning_reason", event.target.value)} disabled={item.status === "saved"} /></label>
             {item.collocations.length > 0 && <div className="collocation-action-list">{item.collocations.map((collocation) => <button key={collocation} onClick={() => suggestionSource === "study" ? runSuggestions(text, "", resultDirection, "study", collocation, true) : suggest(collocation, true)} disabled={!!busy} title={t("Tạo gợi ý riêng cho cụm này", "Suggest this phrase separately")}>+ {collocation}</button>)}</div>}
             <div className="suggestion-actions">{item.status === "pending" ? <><button className="primary-small" onClick={() => saveDraftManually(item)} disabled={!!savingDraftId}>{savingDraftId === item.id ? <LoaderCircle size={15} className="spin" /> : <Check size={15} />}{savingDraftId === item.id ? t("Đang lưu…", "Saving…") : t("Lưu từ", "Save word")}</button><button className="subtle-button" onClick={() => setDrafts((current) => current.map((draft) => draft.id === item.id ? { ...draft, status: "dismissed" } : draft))} disabled={savingDraftId === item.id}>{t("Bỏ qua", "Skip")}</button></> : <><span className="saved-note"><CheckCheck size={16} /> {item.alreadyExisted ? t("Đã có trong kho từ", "Already in vocabulary") : t("Đã lưu", "Saved")}</span>{!item.alreadyExisted && <button className="subtle-button" onClick={() => undoSave(item)} disabled={!!undoingDraftId}>{undoingDraftId === item.id ? <LoaderCircle size={15} className="spin" /> : <RotateCcw size={15} />}{undoingDraftId === item.id ? t("Đang hoàn tác…", "Undoing…") : t("Hoàn tác", "Undo")}</button>}</>}</div>
@@ -361,15 +346,7 @@ export function ChatWorkspace({ historyId }: { historyId?: string }) {
         <label>{t("Kỹ năng", "Skill")}<select value={studyOptions.skill} onChange={(event) => setStudyOptions({ ...studyOptions, skill: event.target.value as StudyOptions["skill"] })}><option value="all">{t("Tất cả", "All")}</option>{ieltsSkills.map((skill) => <option key={skill} value={skill}>{skillLabels[skill]}</option>)}</select></label>
         <label>{t("Lĩnh vực", "Topic")}<select value={studyOptions.topic} onChange={(event) => setStudyOptions({ ...studyOptions, topic: event.target.value as StudyOptions["topic"] })}><option value="all">{t("Mọi lĩnh vực", "Any topic")}</option>{topicKeys.map((topic) => <option key={topic} value={topic}>{topics[topic]}</option>)}</select></label>
         <label>{t("Số gợi ý", "Number of suggestions")}<select value={studyOptions.count} onChange={(event) => setStudyOptions({ ...studyOptions, count: Number(event.target.value) as StudyOptions["count"] })}><option value={5}>5</option><option value={8}>8</option><option value={10}>10</option></select></label>
-      </div><p>{t("Nhãn IELTS là đánh giá mức hữu ích theo ngữ cảnh, chưa phải thống kê tần suất đề thi.", "IELTS labels estimate usefulness in context; they are not exam frequency statistics.")}</p></details>
-      <div className="usage-line">
-        <span>{t("Gợi ý:", "Suggestions:")} {approveBeforeSave ? t("duyệt trước khi lưu", "review before saving") : t("tự gợi ý và lưu", "suggest and save automatically")} · <a href="/settings">{t("Đổi chế độ", "Change mode")}</a></span>
-        <span>{usage ? t(`Hạn mức app hôm nay: dịch còn ${usage.translation.remaining}/${usage.translation.limit} · gợi ý còn ${usage.suggestion.remaining}/${usage.suggestion.limit}`, `Today’s app quota: translations ${usage.translation.remaining}/${usage.translation.limit} · suggestions ${usage.suggestion.remaining}/${usage.suggestion.limit}`) : usageFailed ? t("Chưa tải được hạn mức app", "Could not load app quota") : t("Đang tải hạn mức app…", "Loading app quota…")}</span>
-        {lastCosts.translation && <span>{t("Ước tính dịch:", "Estimated translation cost:")} {lastCosts.translation.estimatedCostUsd === null ? t("chưa tính được", "unavailable") : `$${lastCosts.translation.estimatedCostUsd.toFixed(6)}`}</span>}
-        {lastCosts.suggestion && <span>{t("Ước tính gợi ý:", "Estimated suggestion cost:")} {lastCosts.suggestion.estimatedCostUsd === null ? t("chưa tính được", "unavailable") : `$${lastCosts.suggestion.estimatedCostUsd.toFixed(6)}`}</span>}
-        <a href="https://platform.openai.com/usage" target="_blank" rel="noopener noreferrer">{t("Chi phí thực tế ↗", "Actual costs ↗")}</a>
-      </div>
-      <p className="composer-note">{t("Dán ảnh bằng Ctrl+V (Windows) hoặc ⌘V (Mac). OCR chạy trên thiết bị; ảnh không được tải lên hoặc lưu lại.", "Paste an image with Ctrl+V (Windows) or ⌘V (Mac). OCR runs on your device; images are not uploaded or saved.")}</p>
+      </div></details>
     </div></div></div>
   </main>;
 }
