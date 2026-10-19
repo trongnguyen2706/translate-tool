@@ -1,0 +1,426 @@
+(() => {
+  if (window.__phrasebookContentStarted) return;
+  window.__phrasebookContentStarted = true;
+
+  const PROTOCOL = 1;
+  const isYouTube = location.hostname === "www.youtube.com" && location.pathname === "/watch";
+  const videoContext = { video: null, pausedByUs: false, pausedAt: 0 };
+  const state = { config: {}, popup: null, activeWord: null, closeTimer: 0, sequence: 0, selection: null, ignoreClickUntil: 0 };
+  const host = document.createElement("div");
+  host.id = "phrasebook-extension-root";
+  host.style.cssText = "position:fixed;inset:0;z-index:2147483647;pointer-events:none;";
+  (document.documentElement || document.body).append(host);
+  const shadow = host.attachShadow({ mode: "open" });
+
+  const rootStyle = document.createElement("style");
+  rootStyle.textContent = `
+    :host { all: initial; color-scheme: light; }
+    * { box-sizing: border-box; }
+    .pbx-action { position:absolute; pointer-events:auto; padding:7px 12px; border:1px solid #bfdbfe; border-radius:8px; background:#eff6ff; color:#1d4ed8; box-shadow:0 5px 18px #0f172a22; font:600 13px/1.2 system-ui,sans-serif; cursor:pointer; }
+    .pbx-card { position:absolute; width:min(360px,calc(100vw - 24px)); max-height:min(520px,calc(100vh - 24px)); overflow:auto; pointer-events:auto; border:1px solid #dbe3ef; border-radius:16px; background:#fff; color:#172554; box-shadow:0 18px 55px #0f172a40; font:14px/1.5 system-ui,sans-serif; }
+    .pbx-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; padding:15px 16px 10px; border-bottom:1px solid #eef2f7; }
+    .pbx-term { margin:0; font-size:17px; font-weight:750; overflow-wrap:anywhere; }
+    .pbx-meta { margin-top:2px; color:#64748b; font-size:12px; }
+    .pbx-close { flex:none; width:30px; height:30px; border:0; border-radius:50%; background:#f1f5f9; color:#475569; font:20px/1 system-ui,sans-serif; cursor:pointer; }
+    .pbx-content { padding:13px 16px; }
+    .pbx-definition { margin:0; color:#0f172a; font-size:16px; font-weight:650; overflow-wrap:anywhere; }
+    .pbx-example { margin:11px 0 0; padding:9px 10px; border-left:3px solid #93c5fd; background:#f8fafc; color:#475569; font-size:12px; }
+    .pbx-missing { margin:10px 0 0; color:#64748b; font-size:12px; }
+    .pbx-sense { width:100%; margin:0 0 10px; padding:7px 9px; border:1px solid #cbd5e1; border-radius:7px; background:white; color:#172554; font:13px system-ui,sans-serif; }
+    .pbx-detail { border-top:1px solid #eef2f7; padding:12px 16px; }
+    .pbx-detail h3 { margin:12px 0 4px; color:#2563eb; font-size:11px; letter-spacing:.07em; text-transform:uppercase; }
+    .pbx-detail p,.pbx-detail ul { margin:4px 0; }
+    .pbx-detail ul { padding-left:19px; }
+    .pbx-foot { position:sticky; bottom:0; display:flex; gap:8px; justify-content:flex-end; padding:10px 14px; border-top:1px solid #eef2f7; background:#fff; }
+    .pbx-btn { min-height:36px; padding:0 12px; border:1px solid #cbd5e1; border-radius:8px; background:#fff; color:#1e3a8a; font:650 13px system-ui,sans-serif; cursor:pointer; }
+    .pbx-primary { border-color:#2563eb; background:#2563eb; color:#fff; }
+    .pbx-btn:disabled { opacity:.55; cursor:wait; }
+    .pbx-status { min-height:17px; padding:0 16px 7px; color:#475569; font-size:12px; }
+    .pbx-status[data-kind=error] { color:#b91c1c; }
+    @media (prefers-reduced-motion: reduce) { * { transition:none !important; } }
+  `;
+  shadow.append(rootStyle);
+
+  function send(type, values = {}) {
+    return chrome.runtime.sendMessage({ protocol: PROTOCOL, type, ...values });
+  }
+
+  function safeText(value) { return typeof value === "string" ? value : ""; }
+  function modeLabel(mode) { return ({ "en-en": "Anh → Anh", "en-vi": "Anh → Việt", "vi-en": "Việt → Anh" })[mode] ?? "Anh → Việt"; }
+
+  function mountPoint() {
+    if (isYouTube) return document.querySelector("#movie_player") || document.documentElement;
+    return document.documentElement;
+  }
+
+  function place(rect, box) {
+    const bounds = host.getBoundingClientRect();
+    const width = box.offsetWidth || 340;
+    const height = box.offsetHeight || 190;
+    let left = rect.left - bounds.left + rect.width / 2 - width / 2;
+    let top = rect.bottom - bounds.top + 12;
+    left = Math.max(8, Math.min(left, bounds.width - width - 8));
+    if (top + height > bounds.height - 8) top = rect.top - bounds.top - height - 12;
+    top = Math.max(8, Math.min(top, bounds.height - height - 8));
+    box.style.left = `${left}px`;
+    box.style.top = `${top}px`;
+  }
+
+  function showLookupButton(rect, selectedText, context) {
+    const existing = shadow.querySelector(".pbx-action");
+    if (existing) existing.remove();
+    const button = document.createElement("button");
+    button.className = "pbx-action";
+    button.type = "button";
+    button.textContent = "Tra";
+    button.setAttribute("aria-label", `Tra từ ${selectedText}`);
+    button.addEventListener("click", (event) => {
+      event.preventDefault(); event.stopPropagation();
+      state.selection = { term: selectedText, context };
+      void openPopup(selectedText, rect, state.selection);
+      button.remove();
+    });
+    shadow.append(button);
+    place(rect, button);
+  }
+
+  function contextAround(selection, maxLength = 1000) {
+    const node = selection?.anchorNode?.parentElement?.closest("p,li,blockquote,article,section,div") ?? document.body;
+    return safeText(node?.textContent).replace(/\s+/g, " ").trim().slice(0, maxLength);
+  }
+
+  function isEditable(node) {
+    const element = node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
+    return Boolean(element?.closest("input,textarea,select,[contenteditable=true],[role=textbox]"));
+  }
+
+  document.addEventListener("mouseup", () => {
+    if (isYouTube) return;
+    const selection = window.getSelection();
+    const text = safeText(selection?.toString()).trim();
+    if (!text || text.length > 120 || isEditable(selection.anchorNode)) return;
+    const rect = selection.getRangeAt(0).getBoundingClientRect();
+    if (!rect.width && !rect.height) return;
+    state.selection = { term: text, context: contextAround(selection) };
+    showLookupButton(rect, text, state.selection.context);
+  }, true);
+
+  function originalCaption(segment) {
+    const saved = segment.getAttribute("data-pbx-original");
+    return saved ?? segment.textContent ?? "";
+  }
+
+  function makeInteractive(segment, text) {
+    if (segment.getAttribute("data-pbx-wrapped") === "true" && originalCaption(segment) === text) return;
+    segment.setAttribute("data-pbx-original", text);
+    segment.setAttribute("data-pbx-wrapped", "true");
+    segment.replaceChildren();
+    const pieces = text.match(/[\p{L}\p{M}\p{N}]+(?:['’][\p{L}\p{M}\p{N}]+)*|[^\p{L}\p{M}\p{N}]+/gu) ?? [text];
+    for (const piece of pieces) {
+      if (/^[\p{L}\p{M}\p{N}]/u.test(piece)) {
+        const word = document.createElement("span");
+        word.className = "pbx-word";
+        word.tabIndex = 0;
+        word.textContent = piece;
+        word.dataset.pbxWord = piece;
+        word.addEventListener("pointerenter", () => clearTimeout(state.closeTimer));
+        word.addEventListener("pointerleave", scheduleClose);
+        segment.append(word);
+      } else segment.append(document.createTextNode(piece));
+    }
+  }
+
+  function activateCaptions() {
+    const segments = document.querySelectorAll(".ytp-caption-segment");
+    for (const segment of segments) {
+      if (segment.closest("#phrasebook-extension-root")) continue;
+      const text = segment.getAttribute("data-pbx-wrapped") === "true" ? originalCaption(segment) : segment.textContent;
+      if (text?.trim()) makeInteractive(segment, text);
+    }
+  }
+
+  if (isYouTube) {
+    const observer = new MutationObserver(activateCaptions);
+    observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+    activateCaptions();
+    document.addEventListener("click", onCaptionClick, true);
+    document.addEventListener("keydown", (event) => {
+      if ((event.key === "Enter" || event.key === " ") && event.target instanceof Element && event.target.matches(".pbx-word")) {
+        event.preventDefault(); openFromWord(event.target);
+      }
+    }, true);
+    document.addEventListener("mouseup", onCaptionSelection, true);
+  }
+
+  function onCaptionSelection() {
+    const selection = window.getSelection();
+    const text = safeText(selection?.toString()).trim();
+    if (!text || text.length > 120 || !selection.anchorNode?.parentElement?.closest(".ytp-caption-segment")) return;
+    const rect = selection.getRangeAt(0).getBoundingClientRect();
+    if (!rect.width && !rect.height) return;
+    state.ignoreClickUntil = Date.now() + 350;
+    state.selection = { term: text, context: [...document.querySelectorAll(".ytp-caption-segment")].map(originalCaption).join(" ").slice(0, 1000) };
+    openFromWord(selection.anchorNode.parentElement.closest(".ytp-caption-segment"), state.selection, rect);
+  }
+
+  function onCaptionClick(event) {
+    const word = event.composedPath().find((node) => node instanceof Element && node.matches?.(".pbx-word"));
+    if (!word || Date.now() < state.ignoreClickUntil) return;
+    event.preventDefault(); event.stopPropagation();
+    event.stopImmediatePropagation();
+    openFromWord(word);
+  }
+
+  function openFromWord(element, selected = null, rectOverride = null) {
+    const video = document.querySelector("#movie_player video.html5-main-video") || document.querySelector("video");
+    if (!video) return;
+    const word = selected?.term ?? element.dataset.pbxWord;
+    const sentence = selected?.context ?? [...document.querySelectorAll(".ytp-caption-segment")].map(originalCaption).join(" ").replace(/\s+/g, " ").trim().slice(0, 1000);
+    if (state.popup && videoContext.video === video) {
+      videoContext.video = video;
+    } else {
+      videoContext.video = video;
+      videoContext.pausedByUs = !video.paused;
+      videoContext.pausedAt = video.currentTime;
+      video.addEventListener("play", () => {
+        if (videoContext.video === video) videoContext.pausedByUs = false;
+      }, { once: true });
+      if (!video.paused) video.pause();
+    }
+    void openPopup(word, rectOverride ?? element.getBoundingClientRect(), { term: word, context: sentence, pageUrl: location.href, pageTitle: document.title, videoTime: video.currentTime });
+  }
+
+  async function openPopup(term, rect, capture) {
+    clearTimeout(state.closeTimer);
+    state.activeWord = { term, rect, capture };
+    const sequence = ++state.sequence;
+    if (!state.popup) createPopup();
+    renderLoading(term);
+    const mode = state.config.mode ?? "en-vi";
+    const response = await send("lookup", { term, mode });
+    if (sequence !== state.sequence || state.popup === null) return;
+    if (!response.ok) return showError(response.error);
+    const lookup = response.data;
+    const statusTerm = mode === "vi-en" && lookup.result?.senses?.[0]?.sourceTerm ? lookup.result.senses[0].sourceTerm : term;
+    const statusPromise = send("read-status", { term: statusTerm, mode });
+    const savedStatus = await statusPromise.catch(() => ({ ok: false }));
+    if (sequence !== state.sequence || state.popup === null) return;
+    renderResult(lookup, savedStatus.ok ? savedStatus.data : { state: "unknown", items: [] });
+    const box = shadow.querySelector(".pbx-card");
+    place(rect, box);
+  }
+
+  function createPopup() {
+    const card = document.createElement("section");
+    card.className = "pbx-card";
+    card.setAttribute("role", "dialog");
+    card.setAttribute("aria-label", "Tra từ Phrasebook");
+    card.addEventListener("pointerenter", () => clearTimeout(state.closeTimer));
+    card.addEventListener("pointerleave", scheduleClose);
+    card.addEventListener("click", (event) => event.stopPropagation());
+    shadow.append(card);
+    state.popup = card;
+    document.addEventListener("keydown", onEscape, true);
+    document.addEventListener("pointerdown", onOutside, true);
+  }
+
+  function renderLoading(term) {
+    state.popup.innerHTML = `<div class="pbx-head"><div><h2 class="pbx-term"></h2><div class="pbx-meta"></div></div><button class="pbx-close" aria-label="Đóng">×</button></div><div class="pbx-content"><p>Đang tra từ điển trên máy…</p></div>`;
+    state.popup.querySelector(".pbx-term").textContent = term;
+    state.popup.querySelector(".pbx-meta").textContent = modeLabel(state.config.mode ?? "en-vi");
+    state.popup.querySelector(".pbx-close").addEventListener("click", closePopup);
+  }
+
+  function renderResult(lookup, saved) {
+    const active = state.activeWord;
+    active.lookup = lookup;
+    active.saved = saved;
+    const mode = lookup.mode ?? state.config.mode ?? "en-vi";
+    active.dataVersion = lookup.dataVersion ?? "";
+    const result = lookup.result;
+    const senses = result?.senses ?? [];
+    const sense = active?.selectedSense ?? senses[0] ?? null;
+    const savedItem = findSavedSense(saved, mode, sense, active.term);
+    const head = `<div class="pbx-head"><div><h2 class="pbx-term"></h2><div class="pbx-meta">${modeLabel(mode)}${sense?.ipa ? ` · ${escapeHtml(sense.ipa)}` : ""}</div></div><button class="pbx-close" aria-label="Đóng">×</button></div>`;
+    state.popup.innerHTML = head;
+    state.popup.querySelector(".pbx-term").textContent = mode === "vi-en" && sense?.sourceTerm ? `${active.term} → ${sense.sourceTerm}` : active.term;
+    state.popup.querySelector(".pbx-close").addEventListener("click", closePopup);
+
+    const content = document.createElement("div");
+    content.className = "pbx-content";
+    if (!senses.length) {
+      const missing = document.createElement("p");
+      missing.className = "pbx-missing";
+      missing.textContent = lookup.missingPack ? "Chưa tải từ điển cho chế độ này." : "Từ điển chưa có nghĩa cho từ này.";
+      content.append(missing);
+      if (lookup.missingPack) {
+        const settings = makeButton("Cài từ điển", "pbx-btn", () => chrome.runtime.openOptionsPage());
+        content.append(settings);
+      }
+      const ai = makeButton("Bổ sung bằng AI", "pbx-btn", () => requestEnrichment(active, mode, sense));
+      content.append(ai);
+    } else {
+      if (senses.length > 1) {
+        const select = document.createElement("select"); select.className = "pbx-sense"; select.setAttribute("aria-label", "Chọn nghĩa");
+        senses.forEach((item, index) => {
+          const option = document.createElement("option"); option.value = String(index);
+          option.textContent = `${item.partOfSpeech ? `${item.partOfSpeech}: ` : ""}${item.definitions?.[0] ?? `Nghĩa ${index + 1}`}`;
+          select.append(option);
+        });
+        select.addEventListener("change", () => {
+          active.selectedSense = senses[Number(select.value)];
+          renderResult(lookup, { state: "checking", items: [] });
+          const savedTerm = mode === "vi-en" && active.selectedSense?.sourceTerm ? active.selectedSense.sourceTerm : active.term;
+          const sequence = state.sequence;
+          void send("read-status", { term: savedTerm, mode }).then((response) => {
+            if (sequence === state.sequence && state.popup && response.ok) renderResult(lookup, response.data);
+          });
+        });
+        content.append(select);
+      }
+      const definition = document.createElement("p"); definition.className = "pbx-definition";
+      definition.textContent = sense?.definitions?.[0] ?? "Chưa có nghĩa cơ bản";
+      content.append(definition);
+      if (sense?.examples?.[0]) { const example = document.createElement("p"); example.className = "pbx-example"; example.textContent = sense.examples[0]; content.append(example); }
+      const missing = getMissing(sense);
+      if (missing.length) { const note = document.createElement("p"); note.className = "pbx-missing"; note.textContent = `Chưa có: ${missing.join(", ")}.`; content.append(note); }
+      content.append(makeButton("Bổ sung bằng AI", "pbx-btn", () => requestEnrichment(active, mode, sense)));
+    }
+    state.popup.append(content);
+
+    const details = document.createElement("div"); details.className = "pbx-detail"; details.hidden = !active.expanded;
+    if (sense) renderDetails(details, sense);
+    state.popup.append(details);
+    const status = document.createElement("div"); status.className = "pbx-status"; status.setAttribute("role", "status");
+    status.textContent = savedItem ? "Đã có nghĩa này trong kho" : saved.items?.length ? "Từ này đã có nghĩa khác trong kho" : saved.state === "needs_auth" ? "Đăng nhập để lưu và đồng bộ" : "";
+    state.popup.append(status);
+
+    const footer = document.createElement("div"); footer.className = "pbx-foot";
+    footer.append(makeButton(active.expanded ? "Thu nhỏ" : "Mở rộng", "pbx-btn", () => {
+      active.expanded = !active.expanded;
+      renderResult(lookup, saved);
+      place(active.rect, state.popup);
+    }));
+    footer.append(makeButton(savedItem ? "Đã lưu" : "Lưu", "pbx-btn pbx-primary", () => saveWord(active, mode, sense, status, footer), Boolean(savedItem)));
+    state.popup.append(footer);
+    state.popup.dataset.expanded = active.expanded ? "true" : "false";
+    place(active.rect, state.popup);
+  }
+
+  function getMissing(sense) {
+    const fields = [];
+    if (!sense?.definitions?.length) fields.push("nghĩa");
+    if (!sense?.ipa) fields.push("IPA");
+    if (!sense?.examples?.length) fields.push("ví dụ");
+    if (!sense?.synonyms?.length) fields.push("đồng nghĩa");
+    if (!sense?.antonyms?.length) fields.push("trái nghĩa");
+    if (!sense?.collocations?.length) fields.push("cụm từ đi kèm");
+    return fields;
+  }
+
+  function findSavedSense(saved, mode, sense, queryTerm) {
+    const items = Array.isArray(saved?.items) ? saved.items : [];
+    const provider = mode === "en-en" ? "kaikki-en" : "kaikki-vi";
+    if (sense?.id) {
+      const byReference = items.find((item) => item.identity_refs?.some((ref) =>
+        ref.provider === provider && ref.source_reference === sense.id && ref.dataset_version === (state.activeWord?.dataVersion ?? "")));
+      if (byReference) return byReference;
+    }
+    const definition = safeText(sense?.definitions?.[0]).trim().toLocaleLowerCase("vi").replace(/\s+/g, " ");
+    return items.find((item) => {
+      const savedMeaning = (mode === "en-en" ? item.meaning_en : mode === "en-vi" ? item.meaning_vi : item.meaning_vi)
+        .trim().toLocaleLowerCase("vi").replace(/\s+/g, " ");
+      if (mode === "vi-en") return savedMeaning === queryTerm.trim().toLocaleLowerCase("vi").replace(/\s+/g, " ");
+      return savedMeaning === definition;
+    }) ?? null;
+  }
+
+  function renderDetails(parent, sense) {
+    if (sense.partOfSpeech) addDetail(parent, "Từ loại", sense.partOfSpeech);
+    if (sense.ipa) addDetail(parent, "IPA", sense.ipa);
+    for (const [label, key] of [["Định nghĩa", "definitions"], ["Ví dụ", "examples"], ["Kết hợp từ", "collocations"], ["Đồng nghĩa", "synonyms"], ["Trái nghĩa", "antonyms"]]) {
+      const values = sense[key];
+      if (Array.isArray(values) && values.length) addList(parent, label, values);
+    }
+    if (!parent.childElementCount) { const p = document.createElement("p"); p.textContent = "Chưa có thông tin chi tiết."; parent.append(p); }
+  }
+
+  function addDetail(parent, label, value) { const group = document.createElement("div"); const title = document.createElement("h3"); title.textContent = label; const text = document.createElement("p"); text.textContent = safeText(value); group.append(title, text); parent.append(group); }
+  function addList(parent, label, values) { const group = document.createElement("div"); const title = document.createElement("h3"); title.textContent = label; const list = document.createElement("ul"); for (const value of values) { const item = document.createElement("li"); item.textContent = safeText(value); list.append(item); } group.append(title, list); parent.append(group); }
+  function makeButton(text, className, action, disabled = false) { const button = document.createElement("button"); button.type = "button"; button.className = className; button.textContent = text; button.disabled = disabled; button.addEventListener("click", (event) => { event.stopPropagation(); action(); }); return button; }
+
+  async function requestEnrichment(active, mode, sense) {
+    const status = state.popup.querySelector(".pbx-status");
+    if (status) status.textContent = "Đang yêu cầu bổ sung…";
+    const fields = getMissing(sense);
+    const result = await send("enrich", { term: active.term, mode, context: active.capture.context, fields: fields.map((field) => ({ nghĩa: "definitions", IPA: "ipa", ví_dụ: "examples", "đồng nghĩa": "synonyms", "trái nghĩa": "antonyms", "cụm từ đi kèm": "collocations" })[field]).filter(Boolean), current: sense ?? {} });
+    if (!result.ok) { if (status) { status.textContent = result.error; status.dataset.kind = "error"; } return; }
+    const additions = result.data?.fields ?? {};
+    const enrichedSense = sense ?? { definitions: [], examples: [], synonyms: [], antonyms: [], collocations: [] };
+    if (typeof additions.sourceTerm === "string" && additions.sourceTerm.trim()) enrichedSense.sourceTerm = additions.sourceTerm.trim();
+    for (const [field, value] of Object.entries(additions)) {
+      if (field === "sourceTerm") continue;
+      const populated = field === "ipa" ? Boolean(enrichedSense.ipa?.trim()) : Boolean(enrichedSense[field]?.length);
+      if (!populated && (typeof value === "string" || Array.isArray(value))) enrichedSense[field] = value;
+    }
+    enrichedSense.aiFields = [...new Set([...(enrichedSense.aiFields ?? []), ...Object.keys(additions).filter((field) => field !== "sourceTerm")])];
+    active.selectedSense = enrichedSense;
+    active.lookup = { ...active.lookup, result: { ...(active.lookup?.result ?? {}), senses: [enrichedSense] } };
+    renderResult(active.lookup, active.saved ?? { state: "not_saved", items: [] });
+    const nextStatus = state.popup?.querySelector(".pbx-status");
+    if (nextStatus) nextStatus.textContent = Object.keys(additions).length ? "Đã bổ sung vào bản xem trước. Nhấn Lưu để thêm vào kho." : "AI không tìm thấy thông tin chắc chắn cho các mục còn thiếu.";
+  }
+
+  async function saveWord(active, mode, sense, status, footer) {
+    const canonicalTerm = mode === "vi-en" ? sense?.sourceTerm : active.term;
+    if (!canonicalTerm) { status.textContent = "Chưa có từ tiếng Anh để tạo flashcard."; status.dataset.kind = "error"; return; }
+    const saveButton = footer.querySelector(".pbx-primary");
+    saveButton.disabled = true;
+    status.textContent = "Đang lưu trên máy…";
+    const result = await send("save-capture", { capture: {
+      operationId: crypto.randomUUID(), term: canonicalTerm, queryTerm: active.term, phrase: canonicalTerm.trim().split(/\s+/).length > 1,
+      mode, selectedSense: sense ? { ...sense, dataVersion: active.dataVersion } : null, context: active.capture.context, pageUrl: active.capture.pageUrl ?? location.href,
+      pageTitle: active.capture.pageTitle ?? document.title, videoTime: active.capture.videoTime ?? null
+    } });
+    if (!result.ok) { status.textContent = result.error; status.dataset.kind = "error"; saveButton.disabled = false; return; }
+    status.textContent = "Đã lưu trên máy · chờ đồng bộ";
+    saveButton.textContent = "Đã lưu";
+  }
+
+  function showError(message) { const status = state.popup?.querySelector(".pbx-status"); if (status) { status.textContent = message; status.dataset.kind = "error"; } }
+  function scheduleClose() {
+    clearTimeout(state.closeTimer);
+    if (state.popup?.dataset.expanded === "true") return;
+    state.closeTimer = setTimeout(closePopup, 300);
+  }
+  function closePopup() {
+    clearTimeout(state.closeTimer);
+    state.sequence += 1;
+    state.popup?.remove(); state.popup = null; state.activeWord = null;
+    document.removeEventListener("keydown", onEscape, true);
+    document.removeEventListener("pointerdown", onOutside, true);
+    const video = videoContext.video;
+    if (video && videoContext.pausedByUs && video.paused && Math.abs(video.currentTime - videoContext.pausedAt) < 0.75 && video.isConnected) void video.play().catch(() => {});
+    videoContext.video = null; videoContext.pausedByUs = false;
+  }
+  function onEscape(event) { if (event.key === "Escape") { event.preventDefault(); closePopup(); } }
+  function onOutside(event) { if (!event.composedPath().includes(host)) closePopup(); }
+  function escapeHtml(value) { return safeText(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" })[char]); }
+
+  void send("get-config").then((response) => {
+    state.config = response.data ?? {};
+    const appOrigin = state.config.appOrigin ?? "http://localhost:3000";
+    if (appOrigin && new URL(appOrigin).origin === location.origin) {
+      host.remove();
+      return;
+    }
+    if (isYouTube) {
+      const player = mountPoint();
+      if (player !== host.parentElement) player.append(host);
+    }
+  }).catch(() => {});
+
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === "local" && changes.mode) state.config.mode = changes.mode.newValue ?? "en-vi";
+  });
+})();

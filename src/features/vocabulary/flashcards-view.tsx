@@ -7,7 +7,7 @@ import { flashcardStatusLabels, flashcardStatusLabelsEn, relevanceLabels, releva
 import type { FlashcardStatus } from "@/lib/validation";
 
 type Card = {
-  id: string; term: string; meaning_vi: string; meaning_en: string; example: string;
+  id: string; term: string; source_language: "en" | "vi"; meaning_vi: string; meaning_en: string; example: string;
   kind: "word" | "phrase"; cefr_level: string | null;
   ielts_relevance: "high" | "medium" | "low" | null;
   topics: string[]; tags: string[]; collocations: string[]; status: FlashcardStatus | null;
@@ -55,10 +55,26 @@ export function FlashcardsView() {
   function chooseFilter(value: typeof filter) { setFilter(value); setIndex(0); setFlipped(false); resetPractice(); }
   function move(delta: number) { setIndex((current) => Math.max(0, Math.min(visible.length - 1, current + delta))); setFlipped(false); resetPractice(); }
 
-  const frontText = card ? languageMode === "vi-en" ? card.meaning_vi || card.meaning_en || card.term : card.term : "";
-  const backText = card ? languageMode === "en-en" ? card.meaning_en || card.meaning_vi || t("Chưa có nghĩa", "No meaning yet") : languageMode === "vi-en" ? card.term : card.meaning_vi || card.meaning_en || t("Chưa có nghĩa", "No meaning yet") : "";
-  const frontLabel = languageMode === "vi-en" ? t("NGHĨA TIẾNG VIỆT", "VIETNAMESE MEANING") : t("TỪ TIẾNG ANH", "ENGLISH WORD");
-  const backLabel = languageMode === "en-en" ? t("ĐỊNH NGHĨA TIẾNG ANH", "ENGLISH DEFINITION") : languageMode === "vi-en" ? t("TỪ TIẾNG ANH", "ENGLISH WORD") : t("NGHĨA TIẾNG VIỆT", "VIETNAMESE MEANING");
+  const missingMeaning = t("Chưa có nội dung ở chế độ này", "This side is missing for the selected mode");
+  const frontText = !card ? "" : languageMode === "vi-en" && card.source_language === "en"
+    ? card.meaning_vi || missingMeaning : card.term;
+  const backText = !card ? "" : languageMode === "en-en"
+    ? card.meaning_en || missingMeaning
+    : languageMode === "vi-en"
+      ? card.source_language === "en" ? card.term : card.meaning_en || missingMeaning
+      : card.meaning_vi || missingMeaning;
+  const frontLabel = !card ? "" : languageMode === "vi-en"
+    ? card.source_language === "en" ? t("NGHĨA TIẾNG VIỆT", "VIETNAMESE MEANING") : t("TỪ TIẾNG VIỆT CŨ", "LEGACY VIETNAMESE TERM")
+    : card.source_language === "en" ? t("TỪ TIẾNG ANH", "ENGLISH WORD") : t("MỤC TỪ TIẾNG VIỆT CŨ", "LEGACY VIETNAMESE ITEM");
+  const backLabel = languageMode === "en-en" ? t("ĐỊNH NGHĨA TIẾNG ANH", "ENGLISH DEFINITION")
+    : languageMode === "vi-en" ? t("TỪ TIẾNG ANH", "ENGLISH WORD") : t("NGHĨA TIẾNG VIỆT", "VIETNAMESE MEANING");
+  const frontReady = !!card && (languageMode === "vi-en"
+    ? card.source_language === "en" ? !!card.meaning_vi.trim() : !!card.term.trim()
+    : card.source_language === "en");
+  const backReady = !!card && (languageMode === "en-en" ? !!card.meaning_en.trim()
+    : languageMode === "en-vi" ? !!card.meaning_vi.trim()
+      : card.source_language === "en" ? !!card.term.trim() : !!card.meaning_en.trim());
+  const canRate = frontReady && backReady;
 
   async function setStatus(status: FlashcardStatus) {
     if (!card || busy) return;
@@ -103,6 +119,7 @@ export function FlashcardsView() {
         {flipped && languageMode === "en-en" && card.example && <em>{card.example}</em>}
         <small><RotateCcw size={15} /> {t("Chạm để lật", "Tap to flip")}</small>
       </button>
+      {!canRate && <div className="inline-notice" role="status"><span>{missingMeaning}</span> <a href="/library">{t("Mở Kho từ để bổ sung", "Open library to fill it")}</a></div>}
       <section className="flashcard-practice">
         <div className="flashcard-practice-heading"><div><strong>{t("Luyện đặt câu", "Sentence practice")}</strong><p>{t(`Viết một câu tiếng Anh có “${card.term}”.`, `Write an English sentence using “${card.term}”.`)}</p></div><button className="subtle-button" type="button" onClick={() => { setPracticeOpen(!practiceOpen); setShowHints(false); }}>{practiceOpen ? t("Thu gọn", "Close") : t("Bắt đầu", "Practice")}</button></div>
         {practiceOpen && <><textarea aria-label={t("Câu của bạn", "Your sentence")} value={sentence} onChange={(event) => setSentence(event.target.value)} rows={3} placeholder={t(`Thử đặt câu với “${card.term}”…`, `Try a sentence with “${card.term}”…`)} />
@@ -111,7 +128,7 @@ export function FlashcardsView() {
         </>}
       </section>
       <div className="learning-tags flashcard-tags">{card.cefr_level && <span>{card.cefr_level}</span>}{card.ielts_relevance && <span>{relevance[card.ielts_relevance]}</span>}{card.topics.map((topic) => <span key={topic}>{topics[topic as keyof typeof topics] ?? topic}</span>)}{card.tags.map((tag) => <span key={tag}>#{tag}</span>)}</div>
-      <div className="flashcard-rating" aria-label={t("Chọn mức ghi nhớ", "Choose recall level")}>{statuses.map((status) => <button key={status} className={card.status === status ? "selected" : ""} disabled={busy} onClick={() => setStatus(status)}>{pendingStatus === status && <LoaderCircle size={15} className="spin" />}{statusLabels[status]}</button>)}</div>
+      <div className="flashcard-rating" aria-label={t("Chọn mức ghi nhớ", "Choose recall level")}>{statuses.map((status) => <button key={status} className={card.status === status ? "selected" : ""} disabled={busy || !canRate} onClick={() => setStatus(status)}>{pendingStatus === status && <LoaderCircle size={15} className="spin" />}{statusLabels[status]}</button>)}</div>
       <div className="flashcard-navigation"><button className="subtle-button" onClick={() => move(-1)} disabled={busy || index === 0}><ArrowLeft size={16} /> {t("Trước", "Previous")}</button><button className="subtle-button" onClick={remove} disabled={busy}>{busy && !pendingStatus ? <LoaderCircle size={16} className="spin" /> : <Trash2 size={16} />}{busy && !pendingStatus ? t("Đang bỏ thẻ…", "Removing…") : t("Bỏ thẻ", "Remove card")}</button><button className="subtle-button" onClick={() => move(1)} disabled={busy || index >= visible.length - 1}>{t("Tiếp", "Next")} <ArrowRight size={16} /></button></div>
     </>}
   </div></main>;

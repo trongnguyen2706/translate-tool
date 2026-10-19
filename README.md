@@ -19,6 +19,10 @@ Web app cá nhân để dịch văn bản hoặc chữ trong ảnh và lưu từ
 - Xuất JSON version 3 gồm kho từ, bản dịch, bộ học theo ngày và flashcard; vẫn nhập được JSON version 1–2. CSV dành cho kho từ, có cột tag và tệp mẫu trong Kho từ.
 - RLS theo người dùng, giới hạn số lượt dịch/gợi ý mỗi ngày, OpenAI key chỉ nằm trên server.
 
+## Chrome extension tra từ
+
+Extension Manifest V3 nằm trong [`extension/`](extension/). Chạy `npm run check:extension` để kiểm tra source và tạo thư mục `artifacts/extension/`. Hướng dẫn cấu hình Google OAuth, Supabase migration 004 và build dữ liệu từ điển Kaikki nằm trong [`extension/README.md`](extension/README.md). Gói dữ liệu không commit vào Git; sau khi build, có thể tải lên R2 qua domain riêng và nhập manifest URL trong cài đặt extension.
+
 ## Chạy local
 
 Yêu cầu Node.js 20.9 trở lên và npm.

@@ -1,0 +1,13 @@
+* { box-sizing: border-box; }
+body { width: 300px; margin: 0; color: #172554; font: 14px/1.45 system-ui, sans-serif; background: #f8fafc; }
+main { padding: 16px; }
+header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; font-size: 17px; }
+button, select { width: 100%; min-height: 38px; border: 1px solid #cbd5e1; border-radius: 9px; color: inherit; background: white; font: inherit; }
+button { margin-top: 9px; cursor: pointer; font-weight: 650; }
+button:hover { background: #eff6ff; }
+header button { width: 36px; min-height: 34px; margin: 0; }
+label { display: block; margin-bottom: 5px; color: #475569; font-size: 12px; font-weight: 650; }
+select { padding: 0 10px; }
+#dictionary, #account, #message { min-height: 20px; margin: 9px 0 0; color: #475569; font-size: 12px; }
+.secondary { background: #eff6ff; }
+.text-button { border: 0; background: transparent; color: #2563eb; }

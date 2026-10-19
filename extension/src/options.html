@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="vi">
+  <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="options.css"><title>Cài đặt Phrasebook</title></head>
+  <body>
+    <main>
+      <h1>Cài đặt Phrasebook</h1>
+      <p>Nhập cấu hình kết nối của Phrasebook. Supabase publishable key là khóa công khai dành cho client; không nhập service role key.</p>
+      <form id="settings">
+        <label>Địa chỉ web Phrasebook<input id="appOrigin" type="url" required placeholder="https://phrasebook.example.com"></label>
+        <label>Supabase URL<input id="supabaseUrl" type="url" required placeholder="https://project.supabase.co"></label>
+        <label>Supabase publishable / anon key<input id="supabaseAnonKey" type="password" required autocomplete="off"></label>
+        <label>Google OAuth client ID cho Chrome Extension<input id="googleClientId" type="text" required placeholder="...apps.googleusercontent.com"></label>
+        <label>Dictionary manifest URL<input id="manifestUrl" type="url" placeholder="https://dictionary.example.com/manifest.json"></label>
+        <div class="actions"><button type="submit">Lưu cấu hình</button><button id="signIn" type="button">Đăng nhập bằng Google</button></div>
+        <button id="signOut" class="secondary" type="button">Đăng xuất</button>
+      </form>
+      <p class="hint">Extension chỉ gửi email và text từ/câu nguồn khi đăng nhập hoặc bạn bấm Lưu/Bổ sung bằng AI. Từ điển local hoạt động sau khi tải gói.</p>
+      <p id="status" role="status"></p>
+    </main>
+    <script type="module" src="options.mjs"></script>
+  </body>
+</html>

@@ -3,6 +3,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { hasSupabaseConfig } from "@/lib/config";
 
 export async function proxy(request: NextRequest) {
+  if (request.nextUrl.pathname.startsWith("/api/extension/") || request.nextUrl.pathname.startsWith("/dictionaries/")) {
+    return NextResponse.next({ request });
+  }
   if (!hasSupabaseConfig()) return NextResponse.next({ request });
   let response = NextResponse.next({ request });
   const supabase = createServerClient(

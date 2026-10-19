@@ -27,7 +27,7 @@ export async function GET() {
   for (let offset = 0; offset < cards.length; offset += 100) {
     const ids = cards.slice(offset, offset + 100).map((card) => card.vocabulary_item_id);
     itemPages.push(session.supabase.from("vocabulary_items")
-      .select("id,term,meaning_vi,meaning_en,example,collocations,kind,cefr_level,ielts_relevance,topics,tags")
+      .select("id,term,source_language,meaning_vi,meaning_en,example,collocations,kind,cefr_level,ielts_relevance,topics,tags")
       .eq("user_id", session.user.id).in("id", ids));
   }
   const results = await Promise.all(itemPages);

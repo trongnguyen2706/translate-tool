@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "Phrasebook — tra từ trên video và web",
+  "description": "Tra nghĩa trong từ điển đã tải, lưu từ kèm ngữ cảnh vào Phrasebook.",
+  "version": "0.1.0",
+  "permissions": ["storage", "identity", "alarms"],
+  "host_permissions": [
+    "https://www.youtube.com/*",
+    "https://*/*",
+    "http://localhost:3000/*",
+    "http://127.0.0.1:3000/*"
+  ],
+  "background": {
+    "service_worker": "src/background.mjs",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Phrasebook",
+    "default_popup": "src/popup.html"
+  },
+  "content_scripts": [{
+    "matches": ["https://www.youtube.com/watch*", "https://*/*", "http://localhost:3000/*", "http://127.0.0.1:3000/*"],
+    "js": ["src/content.js"],
+    "css": ["src/content.css"],
+    "run_at": "document_idle"
+  }],
+  "options_page": "src/options.html"
+}

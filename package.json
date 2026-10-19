@@ -6,7 +6,10 @@
     "dev": "next dev --webpack -p 3000",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "build:extension": "node scripts/build_extension.mjs",
+    "check:extension": "node --check extension/src/content.js && node --check extension/src/background.mjs && node --check extension/src/storage.mjs && node --check extension/src/dictionary-core.mjs && node --check extension/src/popup.mjs && node --check extension/src/options.mjs && node tests/extension-core.test.mjs && npm run build:extension",
+    "test:dictionaries": "python -m unittest discover -s tests -p \"test_*.py\""
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.7",
