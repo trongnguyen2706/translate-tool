@@ -40,6 +40,7 @@ Mốc code local: commit `e4cb3f0` (`feat: add Chrome dictionary extension found
 - Staging: app đăng nhập Google thành công bằng project Supabase đã cấu hình; Kho từ tải được (0 từ), `GET /api/vocabulary?occurrences=<uuid>` trả danh sách ngữ cảnh rỗng, và `GET /api/usage` trả quota translation 0/60, suggestion 0/30. Đây là smoke test xác nhận phiên auth và các truy vấn bảng phục vụ migration 004/005 đọc được. Không có từ/capture để thử link nguồn hoặc round-trip restore. Không ghi secret vào repo/log.
 - Export endpoint trả file download nên việc mở URL trực tiếp trong browser automation bị chặn bởi luồng tải xuống; chưa kết luận endpoint lỗi và chưa xác minh round-trip export/import.
 - Extension OAuth trên Chrome thật đăng nhập staging thành công với email allowlist. Trên Wikipedia, bôi đen `example` hiện nút Tra; lần mở popup đứng ở loading do code đợi API saved-status. Đã sửa thứ tự để kết quả local hiện trước, kiểm tra saved-status chạy nền. Build mới pass nhưng chưa reload extension trong Chrome để chạy lại.
+- Báo cáo thử Chrome: click nút Tra bị listener `mouseup` xử lý lại vùng chọn cũ, thay nút đang bấm trước khi sự kiện `click` chạy; click chỗ khác cũng có thể dựng lại Tra từ selection còn lưu. Đã thêm kiểm tra selection thay đổi, ẩn nút khi bắt đầu click ngoài overlay và bỏ qua `mouseup` từ overlay. Đã sửa YouTube caption hit-test theo tọa độ để tránh lớp điều khiển player che vùng click. Cần reload unpacked extension + tab để xác nhận end-to-end.
 
 ## Cần cấu hình trước beta
 

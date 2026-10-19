@@ -5,7 +5,7 @@
   const PROTOCOL = 1;
   const isYouTube = location.hostname === "www.youtube.com" && location.pathname === "/watch";
   const videoContext = { video: null, pausedByUs: false, pausedAt: 0 };
-  const state = { config: {}, popup: null, activeWord: null, closeTimer: 0, sequence: 0, selection: null, ignoreClickUntil: 0 };
+  const state = { config: {}, popup: null, activeWord: null, closeTimer: 0, sequence: 0, selection: null, selectionDirty: false, lastSelectionSignature: "", ignoreClickUntil: 0 };
   const host = document.createElement("div");
   host.id = "phrasebook-extension-root";
   host.style.cssText = "position:fixed;inset:0;z-index:2147483647;pointer-events:none;";
@@ -94,15 +94,42 @@
     return Boolean(element?.closest("input,textarea,select,[contenteditable=true],[role=textbox]"));
   }
 
-  document.addEventListener("mouseup", () => {
+  function selectionSignature(selection) {
+    if (!selection || selection.isCollapsed || !selection.rangeCount) return "";
+    const rect = selection.getRangeAt(0).getBoundingClientRect();
+    return `${selection.toString()}|${Math.round(rect.left)}:${Math.round(rect.top)}:${Math.round(rect.width)}:${Math.round(rect.height)}`;
+  }
+
+  document.addEventListener("selectionchange", () => {
+    const signature = selectionSignature(window.getSelection());
+    if (signature !== state.lastSelectionSignature) {
+      state.lastSelectionSignature = signature;
+      state.selectionDirty = true;
+    }
+  }, true);
+
+  document.addEventListener("mousedown", (event) => {
+    if (event.composedPath().includes(host)) return;
+    state.selectionDirty = false;
+    shadow.querySelector(".pbx-action")?.remove();
+  }, true);
+
+  document.addEventListener("mouseup", (event) => {
     if (isYouTube) return;
+    if (event.composedPath().includes(host)) return;
     const selection = window.getSelection();
     const text = safeText(selection?.toString()).trim();
-    if (!text || text.length > 120 || isEditable(selection.anchorNode)) return;
+    if (!text || text.length > 120 || isEditable(selection.anchorNode)) {
+      shadow.querySelector(".pbx-action")?.remove();
+      state.selectionDirty = false;
+      return;
+    }
+    if (!state.selectionDirty) return;
     const rect = selection.getRangeAt(0).getBoundingClientRect();
-    if (!rect.width && !rect.height) return;
+    if (!rect.width && !rect.height) { state.selectionDirty = false; return; }
     state.selection = { term: text, context: contextAround(selection) };
     showLookupButton(rect, text, state.selection.context);
+    state.selectionDirty = false;
   }, true);
 
   function originalCaption(segment) {
