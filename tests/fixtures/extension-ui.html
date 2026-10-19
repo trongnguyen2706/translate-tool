@@ -21,9 +21,9 @@
 <p>Simulated player, dictionary and video state. No network/auth requests. Double-click title or drag captions to select text.</p>
 <div id="movie_player">
   <video class="html5-main-video"></video>
-  <div class="ytp-caption-window-container"><div class="caption-window"><span class="ytp-caption-segment">accessories specifically for Apple products</span></div></div>
+  <div class="ytp-caption-window-container"><div class="caption-window"><span class="ytp-caption-segment">An eco-friendly company specifically for you</span></div></div>
   <div class="ytp-chrome-bottom"></div>
-  <div class="fixture-toolbar"><button id="fullscreen">Enter fullscreen</button> <button id="run">Run interaction checks</button> <span id="screen-state">Normal view</span></div>
+  <div class="fixture-toolbar"><button id="fullscreen">Enter fullscreen</button> <button id="run">Run interaction checks</button> <button id="preview">Preview hover</button> <span id="screen-state">Normal view</span></div>
 </div>
 <h2 id="page-copy">Aesthetic unboxing and review</h2>
 <pre id="results" role="status">Ready</pre>
@@ -42,6 +42,10 @@
       calls.push(request);
       if (request.type === 'get-config') return { ok:true, data:{ mode:'en-vi', appOrigin:'https://phrasebook.invalid' } };
       if (request.type === 'read-status') return { ok:true, data:{ state:'unknown', items:[] } };
+      if (request.type === 'save-capture') return { ok:true, data:{ queued:true } };
+      if (request.type === 'lookup' && request.term === 'eco-friendly') return { ok:true, data:{ mode:request.mode, result:{ senses:[
+        { id:'eco-friendly:adj:0', partOfSpeech:'adj', definitions:['thân thiện với môi trường'] }
+      ] } } };
       if (request.type === 'lookup') return { ok:true, data:{ mode:request.mode, result:{ senses:[
         { id:'one', partOfSpeech:'adv', definitions:['một cách cụ thể; đặc biệt'], ipa:'/spəˈsɪfɪkli/' },
         { id:'two', partOfSpeech:'adv', definitions:['chính xác; rõ ràng'] }
@@ -60,6 +64,12 @@
   const escape = () => document.dispatchEvent(new KeyboardEvent('keydown', { key:'Escape', bubbles:true }));
   const word = () => document.querySelector('[data-pbx-word="specifically"]');
   const lookupCount = () => calls.filter(call => call.type === 'lookup').length;
+  document.querySelector('#preview').onclick = () => {
+    escape(); window.getSelection().removeAllRanges();
+    const target = document.querySelector('[data-pbx-word="eco-friendly"]');
+    const rect = target.getBoundingClientRect();
+    fire(target, 'pointermove', { clientX:rect.left+rect.width/2, clientY:rect.top+rect.height/2 });
+  };
   const selectWord = (node, start, end) => {
     const selection = window.getSelection();
     selection.removeAllRanges();
@@ -90,10 +100,15 @@
       check(host.parentElement === (document.fullscreenElement || document.documentElement), 'Overlay mounts outside player except in fullscreen');
       check(getComputedStyle(w).userSelect === 'text', 'Caption words allow native text selection');
       check(document.elementFromPoint(point.clientX, point.clientY) === w, 'Caption words are above the player controls');
+      const baseStyle = getComputedStyle(w);
+      const originalStyle = { color:baseStyle.color, fontSize:baseStyle.fontSize, width:rect.width, height:rect.height };
       fire(document.querySelector('.ytp-chrome-bottom'), 'pointermove', point); await tick();
       check(w.classList.contains('pbx-hover'), 'Coordinate hover highlights the exact caption word');
       await Promise.all(w.getAnimations().map(animation => animation.finished));
-      check(getComputedStyle(w).backgroundColor === 'rgb(37, 99, 235)', 'Hover highlight is visibly blue');
+      check(getComputedStyle(w).backgroundColor === 'rgba(125, 211, 252, 0.16)', 'Hover uses a translucent blue background');
+      check(getComputedStyle(w).color === originalStyle.color && getComputedStyle(w).fontSize === originalStyle.fontSize, 'Hover preserves caption text color and size');
+      check(w.getBoundingClientRect().width === originalStyle.width && w.getBoundingClientRect().height === originalStyle.height, 'Hover does not shift caption layout');
+      check(getComputedStyle(w).boxShadow.includes('inset'), 'Hover has a thin underline');
       playback.paused = false;
       fire(w, 'click', point); await tick();
       check(playback.paused && shadow.querySelector('.pbx-definition'), 'Single click pauses video and shows basic definition');
@@ -127,6 +142,36 @@
       segment.textContent = 'Rolling captions now'; await tick();
       check(segment.querySelector('[data-pbx-word="Rolling"]'), 'Replacing a caption with identical plain text restores interactive words');
       segment.textContent = original; await tick();
+      const eco = segment.querySelector('[data-pbx-word="eco-friendly"]');
+      check(eco?.textContent === 'eco-friendly' && !segment.querySelector('[data-pbx-word="friendly"]'), 'A hyphenated compound is one clickable caption token');
+      fire(eco, 'mousedown'); fire(eco, 'click'); await tick();
+      check(shadow.querySelector('.pbx-term')?.textContent === 'eco-friendly', 'Clicking a compound looks up its complete term');
+      check(eco.classList.contains('pbx-active'), 'The word stays marked while its popup is open');
+      escape();
+      check(!eco.classList.contains('pbx-active'), 'Closing the popup clears its active word mark');
+      fire(eco, 'mousedown'); selectWord(eco, 0, 3); fire(eco, 'mouseup', { detail:2 });
+      check(window.getSelection().toString() === 'eco-friendly', 'Double-click selection expands from eco to the entire compound');
+      check(shadow.querySelector('.pbx-action')?.getAttribute('aria-label') === 'Tra từ eco-friendly', 'Double-click offers Tra for the entire compound');
+      const nativeRange = document.createRange();
+      nativeRange.setStart(eco.firstChild, 4); nativeRange.setEnd(eco.nextSibling, 1);
+      fire(eco, 'mousedown'); window.getSelection().removeAllRanges(); window.getSelection().addRange(nativeRange);
+      fire(eco, 'mouseup', { detail:2 });
+      check(window.getSelection().toString() === 'eco-friendly' && shadow.querySelector('.pbx-action')?.getAttribute('aria-label') === 'Tra từ eco-friendly', 'Native double-click with trailing whitespace still selects the whole compound');
+      shadow.querySelector('.pbx-action').click(); await tick();
+      check(shadow.querySelector('.pbx-term')?.textContent === 'eco-friendly' && eco.classList.contains('pbx-active'), 'Tra marks and opens the selected compound');
+      escape(); window.getSelection().removeAllRanges();
+      const tokenSample = "well-known mother-in-law don't eco‐friendly eco‑friendly word—word word–word COVID-19";
+      segment.textContent = tokenSample; await tick();
+      check(JSON.stringify([...segment.querySelectorAll('.pbx-word')].map(node => node.textContent)) === JSON.stringify(['well-known', 'mother-in-law', "don't", 'eco‐friendly', 'eco‑friendly', 'word', 'word', 'word', 'word', 'COVID-19']), 'Compounds and contractions remain whole; en/em dashes separate words');
+      check(segment.textContent === tokenSample, 'Tokenization preserves the exact source caption');
+      const unicode = segment.querySelector('[data-pbx-word="eco‑friendly"]');
+      fire(unicode, 'mousedown'); fire(unicode, 'click'); await tick();
+      check(shadow.querySelector('.pbx-term')?.textContent === 'eco-friendly' && calls.filter(call => call.type === 'lookup').at(-1)?.term === 'eco-friendly', 'A non-breaking hyphen uses the standard dictionary lookup key');
+      shadow.querySelector('.pbx-primary').click(); await tick();
+      const capture = calls.filter(call => call.type === 'save-capture').at(-1)?.capture;
+      check(capture?.term === 'eco-friendly' && capture.queryTerm === 'eco‑friendly' && capture.context === tokenSample, 'Saving keeps a canonical compound and its original query/context');
+      check(!calls.some(call => call.type === 'enrich'), 'Hover and compound lookup never invoke AI');
+      escape(); segment.textContent = original; await tick();
       if (!document.fullscreenElement) {
         // Exercise the lifecycle handler even when browser automation lacks a
         // user activation for real fullscreen. This does not test fullscreen rendering.

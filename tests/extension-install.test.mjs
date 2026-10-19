@@ -35,7 +35,7 @@ function repository(version, entries, mode = "en-vi") {
 const row = (term, definition, language = "vi") => ({ term, senses: [{ id: term, definitions: [definition], glossLanguage: language }] });
 
 test("dictionary installs activate atomically, preserve the old version on failure, and resume verified chunks", async (t) => {
-  let current = repository("test-v1", [[row("bank", "ngân hàng")]]);
+  let current = repository("test-v1", [[row("bank", "ngân hàng"), row("eco-friendly", "thân thiện với môi trường")]]);
   let failPath = "";
   const requests = new Map();
   t.mock.method(globalThis, "fetch", async (input) => {
@@ -50,6 +50,9 @@ test("dictionary installs activate atomically, preserve the old version on failu
 
   assert.equal((await install()).ok, true);
   assert.equal((await lookup()).data.result.senses[0].definitions[0], "ngân hàng");
+  const compound = await send("lookup", { term: "eco‑friendly", mode: "en-vi" });
+  assert.equal(compound.data.result.term, "eco-friendly");
+  assert.equal(compound.data.result.senses[0].definitions[0], "thân thiện với môi trường");
 
   const next = repository("test-v2", [[row("bank", "ngân hàng thương mại")], [row("hello", "xin chào")]]);
   current = next;

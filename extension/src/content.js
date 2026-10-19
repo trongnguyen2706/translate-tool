@@ -110,9 +110,12 @@
     return safeText(node?.textContent).replace(/\s+/g, " ").trim().slice(0, maxLength);
   }
 
+  function elementForNode(node) {
+    return node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
+  }
+
   function isEditable(node) {
-    const element = node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
-    return Boolean(element?.closest("input,textarea,select,[contenteditable=true],[role=textbox]"));
+    return Boolean(elementForNode(node)?.closest("input,textarea,select,[contenteditable=true],[role=textbox]"));
   }
 
   function selectionSignature(selection) {
@@ -132,6 +135,7 @@
   document.addEventListener("mousedown", (event) => {
     if (event.composedPath().includes(host)) return;
     state.selectionDirty = false;
+    state.ignoreClickUntil = 0;
     state.selectionAtPointerDown = selectionSignature(window.getSelection());
     shadow.querySelector(".pbx-action")?.remove();
   }, true);
@@ -139,6 +143,21 @@
   document.addEventListener("mouseup", (event) => {
     if (event.composedPath().includes(host)) return;
     const selection = window.getSelection();
+    // Native double-click selection stops at a hyphen. Treat a caption token
+    // as one word, while leaving deliberate drag selections unchanged.
+    if (isYouTube && event.detail === 2 && selection && !selection.isCollapsed) {
+      const start = elementForNode(selection.anchorNode)?.closest(".pbx-word");
+      const end = elementForNode(selection.focusNode)?.closest(".pbx-word");
+      const token = start ?? end;
+      const selected = selection.toString().trim();
+      // Chrome may include the following whitespace text node in a word selection.
+      if (token && token === captionWordAt(event) && (!start || start === token) && (!end || end === token) && selected && token.textContent.includes(selected)) {
+        const range = document.createRange();
+        range.selectNodeContents(token);
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
+    }
     const text = safeText(selection?.toString()).trim();
     if (!text || text.length > 120 || isEditable(selection.anchorNode)) {
       shadow.querySelector(".pbx-action")?.remove();
@@ -148,11 +167,12 @@
     if (!state.selectionDirty && selectionSignature(selection) === state.selectionAtPointerDown && event.detail < 2) return;
     const rect = selection.getRangeAt(0).getBoundingClientRect();
     if (!rect.width && !rect.height) { state.selectionDirty = false; return; }
-    const caption = isYouTube ? selection.anchorNode?.parentElement?.closest(".ytp-caption-segment") : null;
+    const caption = isYouTube ? elementForNode(selection.anchorNode)?.closest(".ytp-caption-segment") : null;
     const context = caption ? captionContext() : contextAround(selection);
     state.selection = { term: text, context, rect };
     if (caption) state.ignoreClickUntil = Date.now() + 350;
-    showLookupButton(rect, text, context, caption);
+    const selectedWord = elementForNode(selection.anchorNode)?.closest(".pbx-word");
+    showLookupButton(rect, text, context, caption && selectedWord?.textContent === text ? selectedWord : caption);
     state.selectionDirty = false;
   }, true);
 
@@ -171,7 +191,7 @@
     segment.setAttribute("data-pbx-original", text);
     segment.setAttribute("data-pbx-wrapped", "true");
     segment.replaceChildren();
-    const pieces = text.match(/[\p{L}\p{M}\p{N}]+(?:['’][\p{L}\p{M}\p{N}]+)*|[^\p{L}\p{M}\p{N}]+/gu) ?? [text];
+    const pieces = text.match(/[\p{L}\p{M}\p{N}]+(?:['’\-\u2010\u2011][\p{L}\p{M}\p{N}]+)*|[^\p{L}\p{M}\p{N}]+/gu) ?? [text];
     for (const piece of pieces) {
       if (/^[\p{L}\p{M}\p{N}]/u.test(piece)) {
         const word = document.createElement("span");
@@ -280,8 +300,12 @@
 
   async function openPopup(term, rect, capture, anchor = null) {
     clearTimeout(state.closeTimer);
+    const queryTerm = term;
+    term = term.replace(/[\u2010\u2011]/g, "-");
     const mode = state.config.mode ?? "en-vi";
-    state.activeWord = { term, rect, capture, mode, anchor };
+    state.activeWord?.anchor?.classList.remove("pbx-active");
+    if (anchor?.matches(".pbx-word")) anchor.classList.add("pbx-active");
+    state.activeWord = { term, queryTerm, rect, capture, mode, anchor };
     const sequence = ++state.sequence;
     if (!state.popup) createPopup();
     renderLoading(term);
@@ -508,7 +532,7 @@
     saveButton.disabled = true;
     status.textContent = "Đang lưu trên máy…";
     const result = await send("save-capture", { capture: {
-      operationId: crypto.randomUUID(), term: canonicalTerm, queryTerm: active.term, phrase: canonicalTerm.trim().split(/\s+/).length > 1,
+      operationId: crypto.randomUUID(), term: canonicalTerm, queryTerm: active.queryTerm, phrase: canonicalTerm.trim().split(/\s+/).length > 1,
       mode, selectedSense: sense ? { ...sense, dataVersion: active.dataVersion } : null, context: active.capture.context, pageUrl: active.capture.pageUrl ?? location.href,
       pageTitle: active.capture.pageTitle ?? document.title, videoTime: active.capture.videoTime ?? null
     } });
@@ -530,6 +554,7 @@
   function closePopup() {
     clearTimeout(state.closeTimer);
     state.sequence += 1;
+    state.activeWord?.anchor?.classList.remove("pbx-active");
     state.popup?.remove(); state.popup = null; state.activeWord = null;
     document.removeEventListener("keydown", onEscape, true);
     document.removeEventListener("pointerdown", onOutside, true);

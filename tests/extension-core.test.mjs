@@ -19,6 +19,18 @@ test("only known lookup modes are accepted", () => {
   assert.equal(normalizeMode("other"), "en-vi");
 });
 
+test("hyphenated words share dictionary keys across typographic hyphens", () => {
+  const index = { "eco-friendly": [{ definitions: ["environmentally friendly"] }] };
+  for (const term of ["eco-friendly", "Eco‐friendly", "eco‑friendly"]) {
+    assert.equal(normalizeLookupTerm(term), "eco-friendly");
+    assert.equal(lookupFromIndex(index, term)?.term, "eco-friendly");
+  }
+  assert.equal(normalizeLookupTerm("mother-in-law"), "mother-in-law");
+  assert.equal(normalizeLookupTerm("don’t"), "don't");
+  assert.equal(normalizeLookupTerm("eco—friendly"), "eco—friendly");
+  assert.equal(normalizeLookupTerm("eco–friendly"), "eco–friendly");
+});
+
 test("missing detail fields are reported without making an AI request", () => {
   assert.deepEqual(getMissingFields([{ definitions: ["a way to move"], ipa: "/gəʊ/" }]), ["examples", "synonyms"]);
   assert.deepEqual(getMissingFields([]), ["definition", "ipa", "examples", "synonyms"]);

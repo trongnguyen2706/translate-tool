@@ -1,7 +1,9 @@
 #movie_player .ytp-caption-window-container:has(.pbx-word) { z-index: 60; }
 #movie_player .ytp-caption-segment, #movie_player .pbx-word { -webkit-user-select: text !important; user-select: text !important; }
-.pbx-word { color: inherit; font: inherit; cursor: pointer; border-radius: 3px; transition: background-color 100ms ease; }
+.pbx-word { color: inherit; font: inherit; cursor: pointer; border-radius: .18em; -webkit-box-decoration-break: clone; box-decoration-break: clone; transition: background-color 140ms ease, box-shadow 140ms ease; }
 #movie_player.pbx-word-target { cursor: pointer; }
-.pbx-word:hover, .pbx-word.pbx-hover, .pbx-word:focus-visible { outline: 0; background: #2563eb !important; color: #fff !important; box-shadow: inset 0 -2px #93c5fd; text-shadow: none; }
+.pbx-word:hover, .pbx-word.pbx-hover, .pbx-word.pbx-active, .pbx-word:focus-visible { background-color: rgba(125, 211, 252, .16) !important; box-shadow: inset 0 -1.5px 0 rgba(186, 230, 253, .95); }
+.pbx-word.pbx-active { background-color: rgba(125, 211, 252, .24) !important; }
+.pbx-word:focus-visible { outline: 2px solid #bae6fd; outline-offset: 2px; }
 .pbx-caption-mark { text-decoration: underline; text-decoration-color: rgba(56, 189, 248, .9); text-decoration-thickness: 2px; text-underline-offset: 3px; }
 @media (prefers-reduced-motion: reduce) { .pbx-word { transition: none; } }

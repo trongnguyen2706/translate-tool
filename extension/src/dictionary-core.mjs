@@ -1,5 +1,5 @@
 export function normalizeLookupTerm(value) {
-  const term = String(value ?? "").normalize("NFC").trim().replace(/\s+/g, " ").replace(/[’]/g, "'");
+  const term = String(value ?? "").normalize("NFC").trim().replace(/\s+/g, " ").replace(/[’]/g, "'").replace(/[\u2010\u2011]/g, "-");
   const isAcronym = /^[A-Z]{2,4}$/.test(term);
   return isAcronym ? term : term.toLocaleLowerCase("vi");
 }
