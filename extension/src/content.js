@@ -197,17 +197,25 @@
     if (!state.popup) createPopup();
     renderLoading(term);
     const mode = state.config.mode ?? "en-vi";
-    const response = await send("lookup", { term, mode });
+    let response;
+    try {
+      response = await send("lookup", { term, mode });
+    } catch (error) {
+      if (sequence !== state.sequence || state.popup === null) return;
+      return showError(error instanceof Error ? error.message : "Không thể tra từ điển");
+    }
     if (sequence !== state.sequence || state.popup === null) return;
     if (!response.ok) return showError(response.error);
     const lookup = response.data;
     const statusTerm = mode === "vi-en" && lookup.result?.senses?.[0]?.sourceTerm ? lookup.result.senses[0].sourceTerm : term;
-    const statusPromise = send("read-status", { term: statusTerm, mode });
-    const savedStatus = await statusPromise.catch(() => ({ ok: false }));
-    if (sequence !== state.sequence || state.popup === null) return;
-    renderResult(lookup, savedStatus.ok ? savedStatus.data : { state: "unknown", items: [] });
+    renderResult(lookup, { state: "unknown", items: [] });
     const box = shadow.querySelector(".pbx-card");
     place(rect, box);
+    void send("read-status", { term: statusTerm, mode }).then((savedStatus) => {
+      if (sequence !== state.sequence || state.popup === null || !savedStatus.ok) return;
+      renderResult(lookup, savedStatus.data);
+      place(rect, shadow.querySelector(".pbx-card"));
+    }).catch(() => {});
   }
 
   function createPopup() {
@@ -225,7 +233,7 @@
   }
 
   function renderLoading(term) {
-    state.popup.innerHTML = `<div class="pbx-head"><div><h2 class="pbx-term"></h2><div class="pbx-meta"></div></div><button class="pbx-close" aria-label="Đóng">×</button></div><div class="pbx-content"><p>Đang tra từ điển trên máy…</p></div>`;
+    state.popup.innerHTML = `<div class="pbx-head"><div><h2 class="pbx-term"></h2><div class="pbx-meta"></div></div><button class="pbx-close" aria-label="Đóng">×</button></div><div class="pbx-content"><p>Đang tra từ điển trên máy…</p></div><div class="pbx-status" role="status"></div>`;
     state.popup.querySelector(".pbx-term").textContent = term;
     state.popup.querySelector(".pbx-meta").textContent = modeLabel(state.config.mode ?? "en-vi");
     state.popup.querySelector(".pbx-close").addEventListener("click", closePopup);
@@ -387,7 +395,10 @@
     saveButton.textContent = "Đã lưu";
   }
 
-  function showError(message) { const status = state.popup?.querySelector(".pbx-status"); if (status) { status.textContent = message; status.dataset.kind = "error"; } }
+  function showError(message) {
+    const status = state.popup?.querySelector(".pbx-status");
+    if (status) { status.textContent = message; status.dataset.kind = "error"; }
+  }
   function scheduleClose() {
     clearTimeout(state.closeTimer);
     if (state.popup?.dataset.expanded === "true") return;

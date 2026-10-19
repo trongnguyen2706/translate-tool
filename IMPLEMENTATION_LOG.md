@@ -12,16 +12,16 @@ Mốc code local: commit `e4cb3f0` (`feat: add Chrome dictionary extension found
 | S03 | Local pass | MV3 bundle riêng, protocol, IndexedDB và lệnh `check:extension` pass; 4/4 core tests. Chưa có kiểm tra tích hợp trên Chrome. |
 | S04 | Một phần, staging smoke test pass | Migration 004 có tables, RLS và transactional capture/upsert chỉ điền ô trống; migration 005 thêm quota reservations. Qua phiên đăng nhập staging, API Kho từ đọc được danh sách/ngữ cảnh rỗng và API quota đọc được hạn mức, xác nhận các schema/API này hoạt động. Chưa kiểm thử rollback, concurrency, RLS giữa hai tài khoản hoặc restore trên snapshot. |
 | S05 | Một phần | Capture extension dùng RPC; các writer web cũ chưa chuyển sang identity service chung. |
-| S06 | Code có, chưa xác minh | Google ID token → Supabase session, bearer API và allowlist có trong source. Cần extension ID/OAuth client cấu hình và thử login/refresh/logout bằng Chrome thật. |
+| S06 | Login extension staging pass | Google ID token → Supabase session, bearer API và allowlist có trong source. Extension unpacked đăng nhập staging thành công với tài khoản cho phép; chưa thử refresh/logout và tài khoản bị từ chối. |
 | S07 | Một phần | Chunked download, checksum, gzip bounds và IndexedDB install đã viết. Chưa có data pack, R2 domain, progress/resume, cập nhật profile mới và đo dung lượng. |
-| S08 | Code có, chưa xác minh | Website selection → nút Tra → popup/expand/save/AI có trong source. Chưa thử trên trang thực, accessibility/zoom/CSS và network. |
+| S08 | Một phần, Chrome thật | Trên Wikipedia, bôi đen từ hiển thị nút Tra cạnh vùng chọn. Popup mở được nhưng từng giữ trạng thái loading; code đã đổi để render tra local trước khi chờ kiểm tra trạng thái lưu từ server. Cần reload unpacked extension và thử lại; chưa kiểm tra save/expand/AI/accessibility/zoom. |
 | S09 | Code có, chưa xác minh | YouTube overlay/pause/resume có trong source. Chưa kiểm tra CC rolling, SPA, fullscreen, user pause/play, Shorts/PiP. |
 | S10 | Một phần | IndexedDB queue, lease/retry, auth scoping và RPC idempotency đã viết; `queryTerm` trong payload đã được sửa. Chưa thử offline/restart/two-account hoặc cập nhật UI web sau sync. |
 | S11 | Một phần | AI chỉ gọi khi bấm; extension draft và Kho từ bổ sung ô trống theo mode, từng từ hoặc nhóm tối đa 100 mục/lượt, có tiến độ/dừng và optimistic revision check. Migration 005/API đặt chỗ quota nguyên tử cho dịch, gợi ý, phân loại, tag và enrichment; provenance AI được lưu. Chưa có nguồn Dictionary trong web app, cache/request ledger, hoặc kiểm thử DB thật. |
 | S12 | Một phần | Flashcard API/UI không fallback nghĩa giữa ngôn ngữ; extension tạo flashcard trong capture. Kho từ hiển thị IPA/synonyms/antonyms và provenance; mỗi thẻ tải ngữ cảnh theo trang 10 mục và mở lại nguồn/video đúng timestamp. Kho từ staging tải được nhưng hiện chưa có từ/capture để kiểm thử link nguồn thật. |
 | S13 | Đang làm | Export/import JSON v4 có details/provenance/revision, dictionary refs, occurrences và remap từ ID cũ sang ID hiện có; vẫn nhận v1–v3. CSV không phụ thuộc cột migration mới. JSON giới hạn 20 MB, CSV 2 MB. Staging đã đăng nhập và các API đọc schema hoạt động; chưa diễn tập export/import với dữ liệu thật, ZIP/checkpoint, hơn 2.000 mục hoặc cutover identity. |
 | S14 | Chưa bắt đầu | Chưa chạy kiểm thử multi-user, concurrent, load hoặc offline dài hạn. |
-| S15 | Đang làm | Staging Supabase và Google OAuth đã cấu hình; đăng nhập web staging thành công. Chưa có beta user, staging extension OAuth client/ID, dictionary pack hoặc Chrome end-to-end. |
+| S15 | Đang làm | Staging Supabase và Google OAuth đã cấu hình; đăng nhập web và extension staging thành công. Chưa có beta user, dictionary pack hoặc Chrome end-to-end. |
 | S16 | Chưa bắt đầu | Chưa chuẩn bị icon/listing hoặc gửi Chrome Web Store. |
 | S17 | Chưa bắt đầu | Chưa public enrollment, billing hay vận hành nhiều người dùng. |
 
@@ -39,6 +39,7 @@ Mốc code local: commit `e4cb3f0` (`feat: add Chrome dictionary extension found
 - S12 context panel: lint, `next typegen` + `tsc`, production build và `git diff --check` pass; chưa kiểm tra URL YouTube/trang từ một capture thật vì extension chưa được cài và staging hiện chưa có từ.
 - Staging: app đăng nhập Google thành công bằng project Supabase đã cấu hình; Kho từ tải được (0 từ), `GET /api/vocabulary?occurrences=<uuid>` trả danh sách ngữ cảnh rỗng, và `GET /api/usage` trả quota translation 0/60, suggestion 0/30. Đây là smoke test xác nhận phiên auth và các truy vấn bảng phục vụ migration 004/005 đọc được. Không có từ/capture để thử link nguồn hoặc round-trip restore. Không ghi secret vào repo/log.
 - Export endpoint trả file download nên việc mở URL trực tiếp trong browser automation bị chặn bởi luồng tải xuống; chưa kết luận endpoint lỗi và chưa xác minh round-trip export/import.
+- Extension OAuth trên Chrome thật đăng nhập staging thành công với email allowlist. Trên Wikipedia, bôi đen `example` hiện nút Tra; lần mở popup đứng ở loading do code đợi API saved-status. Đã sửa thứ tự để kết quả local hiện trước, kiểm tra saved-status chạy nền. Build mới pass nhưng chưa reload extension trong Chrome để chạy lại.
 
 ## Cần cấu hình trước beta
 
