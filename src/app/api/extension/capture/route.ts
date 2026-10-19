@@ -48,6 +48,8 @@ export async function POST(request: Request) {
     collocations: capture.mode !== "vi-en" ? sense?.collocations ?? [] : [],
     details: sense ? {
       partOfSpeech: sense.partOfSpeech ?? null, ipa: sense.ipa ?? null,
+      definitionLanguage: capture.mode === "en-vi" ? "vi" : "en",
+      definitionsByLanguage: { [capture.mode === "en-vi" ? "vi" : "en"]: sense.definitions ?? [] },
       definitions: sense.definitions ?? [], examples: sense.examples ?? [],
       synonyms: sense.synonyms ?? [], antonyms: sense.antonyms ?? [], collocations: sense.collocations ?? []
     } : {},

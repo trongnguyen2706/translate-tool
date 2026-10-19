@@ -17,8 +17,8 @@ Mốc code local: commit `e4cb3f0` (`feat: add Chrome dictionary extension found
 | S08 | Code có, chưa xác minh | Website selection → nút Tra → popup/expand/save/AI có trong source. Chưa thử trên trang thực, accessibility/zoom/CSS và network. |
 | S09 | Code có, chưa xác minh | YouTube overlay/pause/resume có trong source. Chưa kiểm tra CC rolling, SPA, fullscreen, user pause/play, Shorts/PiP. |
 | S10 | Một phần | IndexedDB queue, lease/retry, auth scoping và RPC idempotency đã viết; `queryTerm` trong payload đã được sửa. Chưa thử offline/restart/two-account hoặc cập nhật UI web sau sync. |
-| S11 | Một phần | AI chỉ gọi khi bấm; route trả trường thiếu và provenance được gửi lúc capture. Migration 005 cùng API dùng RPC đặt chỗ/ghi usage nguyên tử cho dịch, gợi ý, phân loại, tag và extension; API usage tính cả reservation đang chạy. Vẫn thiếu cache/request ledger cho enrichment và UI bổ sung nhóm trong Kho từ. RPC chưa chạy trên database thật. |
-| S12 | Một phần | Flashcard API/UI không fallback nghĩa giữa ngôn ngữ; extension tạo flashcard trong capture. Chưa có UI Kho từ cho provenance/occurrences/enrichment hàng loạt, chưa kiểm thử hồi quy dữ liệu cũ. |
+| S11 | Một phần | AI chỉ gọi khi bấm; extension draft và Kho từ bổ sung ô trống theo mode, từng từ hoặc nhóm tối đa 100 mục/lượt, có tiến độ/dừng và optimistic revision check. Migration 005/API đặt chỗ quota nguyên tử cho dịch, gợi ý, phân loại, tag và enrichment; provenance AI được lưu. Chưa có nguồn Dictionary trong web app, cache/request ledger, hoặc kiểm thử DB thật. |
+| S12 | Một phần | Flashcard API/UI không fallback nghĩa giữa ngôn ngữ; extension tạo flashcard trong capture. Kho từ hiển thị IPA/synonyms/antonyms và provenance; chưa có trang occurrences/link video, export/import v4 và kiểm thử hồi quy dữ liệu cũ. |
 | S13 | Chưa bắt đầu | Chưa có backup JSON v4/cutover/restore diễn tập. |
 | S14 | Chưa bắt đầu | Chưa chạy kiểm thử multi-user, concurrent, load hoặc offline dài hạn. |
 | S15 | Chưa bắt đầu | Chưa có staging cloud/beta. |
@@ -33,6 +33,7 @@ Mốc code local: commit `e4cb3f0` (`feat: add Chrome dictionary extension found
 - `npm.cmd run test:dictionaries` — pass; 4 fixture tests.
 - `npm.cmd run build` — pass trên Next.js 16.3.6 sau khi cho phép worker chạy ngoài sandbox.
 - Sau mốc `e4cb3f0`, lint, typecheck và production build đã chạy lại sau thay đổi quota; extension tests và dictionary fixture tests vẫn pass. Migration 005 cần được kiểm thử trên Supabase staging trước khi deploy. Máy hiện không có `psql`/Supabase CLI; Docker CLI có nhưng chưa có engine.
+- Sau mốc quota, lint, typecheck, production build, extension tests và dictionary fixture tests chạy lại sau API/UI bổ sung Kho từ; migration 004/005 và thao tác với Supabase vẫn chưa được kiểm tra trên database.
 - `git diff --check` — pass; chỉ có cảnh báo đổi LF/CRLF của Git trên Windows.
 
 ## Cần cấu hình trước beta

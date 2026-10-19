@@ -6,7 +6,7 @@ import { vocabularySchema, vocabularyUpdateSchema } from "@/lib/validation";
 
 export const dynamic = "force-dynamic";
 
-const fields = "id,term,kind,source_language,meaning_vi,meaning_en,example,collocations,source_text,note,cefr_level,ielts_relevance,ielts_skills,topics,tags,learning_reason,created_at,updated_at";
+const fields = "id,term,kind,source_language,meaning_vi,meaning_en,example,collocations,source_text,note,cefr_level,ielts_relevance,ielts_skills,topics,tags,learning_reason,details,field_provenance,revision,created_at,updated_at";
 
 export async function GET() {
   const session = await requireApiSession();
@@ -62,16 +62,22 @@ export async function PATCH(request: NextRequest) {
   if (!parsed.success) return apiError("Mục từ không hợp lệ.");
   const { id, values } = parsed.data;
   const payload: Record<string, unknown> = { ...values, updated_at: new Date().toISOString() };
+  const { data: old, error: oldError } = await session.supabase.from("vocabulary_items")
+    .select("meaning_en,meaning_vi,revision,field_provenance").eq("id", id).eq("user_id", session.user.id).maybeSingle();
+  if (oldError) return apiError("Không thể tải mục từ cần sửa.", 500);
+  if (!old) return apiError("Không tìm thấy mục từ.", 404);
+  payload.revision = old.revision + 1;
+  const provenance = { ...((old.field_provenance ?? {}) as Record<string, unknown>) };
+  for (const field of Object.keys(values)) provenance[field] = { source: "manual", updated_at: payload.updated_at };
+  payload.field_provenance = provenance;
   if (values.term) payload.normalized_term = normalizeText(values.term);
   if (values.meaning_en !== undefined || values.meaning_vi !== undefined) {
-    const { data: old } = await session.supabase.from("vocabulary_items")
-      .select("meaning_en,meaning_vi").eq("id", id).eq("user_id", session.user.id).single();
-    if (!old) return apiError("Không tìm thấy mục từ.", 404);
     payload.normalized_meaning = meaningKey(values.meaning_en ?? old.meaning_en, values.meaning_vi ?? old.meaning_vi);
   }
   const { data, error } = await session.supabase.from("vocabulary_items")
-    .update(payload).eq("id", id).eq("user_id", session.user.id).select(fields).single();
+    .update(payload).eq("id", id).eq("user_id", session.user.id).eq("revision", old.revision).select(fields).maybeSingle();
   if (error) return apiError("Không thể sửa mục từ.", 500);
+  if (!data) return apiError("Mục từ vừa được cập nhật ở nơi khác. Tải lại trang rồi thử lại.", 409);
   return NextResponse.json({ item: data });
 }
 

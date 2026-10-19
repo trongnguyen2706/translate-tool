@@ -14,7 +14,7 @@ Web app cá nhân để dịch văn bản hoặc chữ trong ảnh và lưu từ
 - Trên PC, bản dịch và danh sách gợi ý có vùng cuộn riêng; trên màn hình hẹp có tab chuyển giữa hai phần.
 - Menu trái luôn hiện khi chuyển trang trên PC; mục đang mở có vòng xoay chờ ngay trong menu. Trong Cài đặt có thể chọn giao diện sáng/tối và tiếng Việt/English; lựa chọn được lưu trong trình duyệt.
 - Hiển thị lượt dịch/gợi ý còn lại theo hạn mức app mỗi ngày và chi phí USD ước tính của từng yêu cầu OpenAI vừa chạy.
-- Kho từ: thêm thủ công, sửa, xóa, tìm kiếm, sắp xếp, lọc theo ngày/tuần/tháng/thứ, level, IELTS, lĩnh vực và tag tự chọn. Từ nhập JSON/CSV được gắn tag “Đã nhập”. Có thể phân loại lại tối đa 10 từ cũ mỗi lần bằng AI; mỗi lần tính một lượt gợi ý.
+- Kho từ: thêm thủ công, sửa, xóa, tìm kiếm, sắp xếp, lọc theo ngày/tuần/tháng/thứ, level, IELTS, lĩnh vực và tag tự chọn. Từ nhập JSON/CSV được gắn tag “Đã nhập”. Có thể phân loại/gắn tag bằng AI và bổ sung ô trống trên một từ hoặc nhóm từ với tiến độ, nút dừng và provenance; AI chỉ chạy sau khi bấm. Mỗi từ bổ sung tính một lượt gợi ý.
 - Flashcard: tạo từ từng mục trong kho hoặc từ bộ từ hôm nay, chọn thứ tự Anh–Anh/Anh–Việt/Việt–Anh, luyện đặt câu với gợi ý nghĩa, collocation và ví dụ, lưu bốn mức “Chưa thuộc”, “Sơ sơ”, “Thuộc rồi”, “Nằm lòng”.
 - Xuất JSON version 3 gồm kho từ, bản dịch, bộ học theo ngày và flashcard; vẫn nhập được JSON version 1–2. CSV dành cho kho từ, có cột tag và tệp mẫu trong Kho từ.
 - RLS theo người dùng, giới hạn số lượt dịch/gợi ý mỗi ngày, OpenAI key chỉ nằm trên server.
