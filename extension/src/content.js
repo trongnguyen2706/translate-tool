@@ -164,7 +164,11 @@
   }
 
   function onCaptionClick(event) {
-    const word = event.composedPath().find((node) => node instanceof Element && node.matches?.(".pbx-word"));
+    const word = event.composedPath().find((node) => node instanceof Element && node.matches?.(".pbx-word"))
+      ?? [...document.querySelectorAll(".ytp-caption-segment .pbx-word")].find((candidate) => {
+        const rect = candidate.getBoundingClientRect();
+        return event.clientX >= rect.left && event.clientX <= rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom;
+      });
     if (!word || Date.now() < state.ignoreClickUntil) return;
     event.preventDefault(); event.stopPropagation();
     event.stopImmediatePropagation();
