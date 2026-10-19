@@ -1,5 +1,6 @@
 import { lookupFromIndex, normalizeLookupTerm, normalizeMode } from "./dictionary-core.mjs";
 import { getActivePackage, getEntry, listQueue, openDatabase, putQueueItem, transaction } from "./storage.mjs";
+import { requestJson } from "./network.mjs";
 
 const APP_ORIGIN_DEFAULT = "http://localhost:3000";
 const MODES = { "en-en": "phrasebook-en-en", "en-vi": "phrasebook-en-vi", "vi-en": "phrasebook-vi-en" };
@@ -27,6 +28,7 @@ async function handleMessage(message, sender) {
     case "get-config": return chrome.storage.local.get(["mode", "appOrigin", "manifestUrl", "account"]);
     case "sign-in": return signIn(message.config);
     case "sign-out": return signOut();
+    case "open-settings": return chrome.runtime.openOptionsPage();
     case "set-mode": {
       const mode = normalizeMode(message.mode);
       await chrome.storage.local.set({ mode });
@@ -70,13 +72,10 @@ async function enrich(message) {
   const account = await getAuthorizedAccount();
   if (!account?.accessToken) throw new Error("Đăng nhập để dùng AI bổ sung từ");
   const origin = validateAppOrigin(account.appOrigin ?? APP_ORIGIN_DEFAULT);
-  const response = await fetch(`${origin}/api/extension/enrich`, {
+  return requestJson(`${origin}/api/extension/enrich`, {
     method: "POST", headers: { "Authorization": `Bearer ${account.accessToken}`, "Content-Type": "application/json" },
     body: JSON.stringify({ term: message.term, mode: normalizeMode(message.mode), context: String(message.context ?? "").slice(0, 2000), fields: message.fields, current: message.current ?? {} })
   });
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error ?? "Không thể bổ sung bằng AI");
-  return data;
 }
 
 async function saveCapture(input, sender) {
@@ -173,6 +172,7 @@ async function getAuthorizedAccount() {
     return null;
   }
   const response = await fetch(`${account.supabaseUrl}/auth/v1/token?grant_type=refresh_token`, {
+    signal: AbortSignal.timeout(10_000),
     method: "POST", headers: { apikey: account.supabaseAnonKey, "Content-Type": "application/json" },
     body: JSON.stringify({ refresh_token: account.refreshToken })
   });

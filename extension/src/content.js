@@ -244,7 +244,7 @@
     place(rect, box);
     void send("read-status", { term: statusTerm, mode }).then((savedStatus) => {
       if (sequence !== state.sequence || state.popup === null || !savedStatus.ok) return;
-      renderResult(lookup, savedStatus.data);
+      renderResult(state.activeWord.lookup ?? lookup, savedStatus.data);
       place(rect, shadow.querySelector(".pbx-card"));
     }).catch(() => {});
   }
@@ -293,14 +293,17 @@
       missing.textContent = lookup.missingPack ? "Chưa tải từ điển cho chế độ này." : "Từ điển chưa có nghĩa cho từ này.";
       content.append(missing);
       if (lookup.missingPack) {
-        const settings = makeButton("Cài từ điển", "pbx-btn", () => chrome.runtime.openOptionsPage());
+        const settings = makeButton("Cài từ điển", "pbx-btn", () => { void send("open-settings").catch((error) => showError(error.message)); });
         content.append(settings);
       }
       const ai = makeButton("Bổ sung bằng AI", "pbx-btn", () => requestEnrichment(active, mode, sense));
+      ai.disabled = Boolean(active.enriching);
+      if (active.enriching) ai.textContent = "AI đang xử lý…";
       content.append(ai);
     } else {
       if (senses.length > 1) {
         const select = document.createElement("select"); select.className = "pbx-sense"; select.setAttribute("aria-label", "Chọn nghĩa");
+        select.disabled = Boolean(active.enriching);
         senses.forEach((item, index) => {
           const option = document.createElement("option"); option.value = String(index);
           option.textContent = `${item.partOfSpeech ? `${item.partOfSpeech}: ` : ""}${item.definitions?.[0] ?? `Nghĩa ${index + 1}`}`;
@@ -323,7 +326,7 @@
       if (sense?.examples?.[0]) { const example = document.createElement("p"); example.className = "pbx-example"; example.textContent = sense.examples[0]; content.append(example); }
       const missing = getMissing(sense);
       if (missing.length) { const note = document.createElement("p"); note.className = "pbx-missing"; note.textContent = `Chưa có: ${missing.join(", ")}.`; content.append(note); }
-      content.append(makeButton("Bổ sung bằng AI", "pbx-btn", () => requestEnrichment(active, mode, sense)));
+      content.append(makeButton(active.enriching ? "AI đang xử lý…" : "Bổ sung bằng AI", "pbx-btn", () => requestEnrichment(active, mode, sense), Boolean(active.enriching)));
     }
     state.popup.append(content);
 
@@ -332,6 +335,8 @@
     state.popup.append(details);
     const status = document.createElement("div"); status.className = "pbx-status"; status.setAttribute("role", "status");
     status.textContent = savedItem ? "Đã có nghĩa này trong kho" : saved.items?.length ? "Từ này đã có nghĩa khác trong kho" : saved.state === "needs_auth" ? "Đăng nhập để lưu và đồng bộ" : "";
+    if (active.enrichmentStatus) status.textContent = active.enrichmentStatus;
+    if (active.enrichmentError) status.dataset.kind = "error";
     state.popup.append(status);
 
     const footer = document.createElement("div"); footer.className = "pbx-foot";
@@ -340,7 +345,7 @@
       renderResult(lookup, saved);
       place(active.rect, state.popup);
     }));
-    footer.append(makeButton(savedItem ? "Đã lưu" : "Lưu", "pbx-btn pbx-primary", () => saveWord(active, mode, sense, status, footer), Boolean(savedItem)));
+    footer.append(makeButton(savedItem ? "Đã lưu" : "Lưu", "pbx-btn pbx-primary", () => saveWord(active, mode, sense, status, footer), Boolean(savedItem) || Boolean(active.enriching)));
     state.popup.append(footer);
     state.popup.dataset.expanded = active.expanded ? "true" : "false";
     place(active.rect, state.popup);
@@ -389,25 +394,46 @@
   function makeButton(text, className, action, disabled = false) { const button = document.createElement("button"); button.type = "button"; button.className = className; button.textContent = text; button.disabled = disabled; button.addEventListener("click", (event) => { event.stopPropagation(); action(); }); return button; }
 
   async function requestEnrichment(active, mode, sense) {
-    const status = state.popup.querySelector(".pbx-status");
-    if (status) status.textContent = "Đang yêu cầu bổ sung…";
-    const fields = getMissing(sense);
-    const result = await send("enrich", { term: active.term, mode, context: active.capture.context, fields: fields.map((field) => ({ nghĩa: "definitions", IPA: "ipa", ví_dụ: "examples", "đồng nghĩa": "synonyms", "trái nghĩa": "antonyms", "cụm từ đi kèm": "collocations" })[field]).filter(Boolean), current: sense ?? {} });
-    if (!result.ok) { if (status) { status.textContent = result.error; status.dataset.kind = "error"; } return; }
-    const additions = result.data?.fields ?? {};
-    const enrichedSense = sense ?? { definitions: [], examples: [], synonyms: [], antonyms: [], collocations: [] };
-    if (typeof additions.sourceTerm === "string" && additions.sourceTerm.trim()) enrichedSense.sourceTerm = additions.sourceTerm.trim();
-    for (const [field, value] of Object.entries(additions)) {
-      if (field === "sourceTerm") continue;
-      const populated = field === "ipa" ? Boolean(enrichedSense.ipa?.trim()) : Boolean(enrichedSense[field]?.length);
-      if (!populated && (typeof value === "string" || Array.isArray(value))) enrichedSense[field] = value;
+    if (active.enriching || active !== state.activeWord) return;
+    const fields = getMissing(sense).map((field) => ({ nghĩa: "definitions", IPA: "ipa", "ví dụ": "examples", "đồng nghĩa": "synonyms", "trái nghĩa": "antonyms", "cụm từ đi kèm": "collocations" })[field]).filter(Boolean);
+    if (!fields.length) {
+      active.enrichmentStatus = "Mục từ này đã có đủ thông tin; không cần gọi AI.";
+      renderResult(active.lookup, active.saved ?? { state: "unknown", items: [] });
+      return;
     }
-    enrichedSense.aiFields = [...new Set([...(enrichedSense.aiFields ?? []), ...Object.keys(additions).filter((field) => field !== "sourceTerm")])];
-    active.selectedSense = enrichedSense;
-    active.lookup = { ...active.lookup, result: { ...(active.lookup?.result ?? {}), senses: [enrichedSense] } };
-    renderResult(active.lookup, active.saved ?? { state: "not_saved", items: [] });
-    const nextStatus = state.popup?.querySelector(".pbx-status");
-    if (nextStatus) nextStatus.textContent = Object.keys(additions).length ? "Đã bổ sung vào bản xem trước. Nhấn Lưu để thêm vào kho." : "AI không tìm thấy thông tin chắc chắn cho các mục còn thiếu.";
+    clearTimeout(state.closeTimer);
+    active.enriching = true;
+    active.enrichmentError = false;
+    active.enrichmentStatus = "AI đang xử lý… Bạn chỉ cần bấm một lần.";
+    renderResult(active.lookup, active.saved ?? { state: "unknown", items: [] });
+    try {
+      const result = await send("enrich", { term: active.term, mode, context: active.capture.context, fields, current: sense ?? {} });
+      if (active !== state.activeWord || !state.popup) return;
+      if (!result.ok) throw new Error(result.error || "Không thể bổ sung bằng AI");
+      const additions = result.data?.fields ?? {};
+      const enrichedSense = { definitions: [], examples: [], synonyms: [], antonyms: [], collocations: [], ...sense };
+      if (!enrichedSense.sourceTerm && typeof additions.sourceTerm === "string" && additions.sourceTerm.trim()) enrichedSense.sourceTerm = additions.sourceTerm.trim();
+      for (const [field, value] of Object.entries(additions)) {
+        if (field === "sourceTerm") continue;
+        const populated = field === "ipa" ? Boolean(enrichedSense.ipa?.trim()) : Boolean(enrichedSense[field]?.length);
+        if (!populated && (typeof value === "string" || Array.isArray(value))) enrichedSense[field] = value;
+      }
+      const added = Object.keys(additions).filter((field) => typeof additions[field] === "string" ? additions[field].trim() : additions[field]?.length);
+      enrichedSense.aiFields = [...new Set([...(enrichedSense.aiFields ?? []), ...added.filter((field) => field !== "sourceTerm")])];
+      active.selectedSense = enrichedSense;
+      const senses = [...(active.lookup?.result?.senses ?? [])];
+      const selectedIndex = sense ? senses.indexOf(sense) : -1;
+      if (selectedIndex >= 0) senses[selectedIndex] = enrichedSense;
+      else senses.push(enrichedSense);
+      active.lookup = { ...active.lookup, result: { ...(active.lookup?.result ?? {}), senses } };
+      active.enrichmentStatus = added.length ? "Đã bổ sung vào bản xem trước. Nhấn Lưu để thêm vào kho." : "AI không tìm thấy thông tin chắc chắn cho các mục còn thiếu.";
+    } catch (error) {
+      active.enrichmentError = true;
+      active.enrichmentStatus = error instanceof Error ? error.message : "Không thể bổ sung bằng AI. Hãy thử lại.";
+    } finally {
+      active.enriching = false;
+      if (active === state.activeWord && state.popup) renderResult(active.lookup, active.saved ?? { state: "unknown", items: [] });
+    }
   }
 
   async function saveWord(active, mode, sense, status, footer) {
@@ -432,6 +458,7 @@
   }
   function scheduleClose() {
     clearTimeout(state.closeTimer);
+    if (state.activeWord?.enriching) return;
     if (state.popup?.dataset.expanded === "true") return;
     state.closeTimer = setTimeout(closePopup, 300);
   }

@@ -15,7 +15,10 @@ $("#mode").addEventListener("change", async (event) => {
   await refresh();
 });
 $("#install").addEventListener("click", async () => {
-  $("#message").textContent = "Đang tải và kiểm tra gói…";
+  if ($("#install").disabled) return;
+  $("#install").disabled = true;
+  $("#mode").disabled = true;
+  $("#message").textContent = "Đang tải và kiểm tra gói… Giữ cửa sổ này mở đến khi hoàn tất.";
   try {
     const { manifestUrl } = await chrome.storage.local.get("manifestUrl");
     if (!manifestUrl) throw new Error("Nhập manifest URL trong Cài đặt trước.");
@@ -24,6 +27,7 @@ $("#install").addEventListener("click", async () => {
     $("#message").textContent = `Đã cài ${result.data.entryCount.toLocaleString("vi-VN")} mục.`;
     await refresh();
   } catch (error) { $("#message").textContent = error.message; }
+  finally { $("#install").disabled = false; $("#mode").disabled = false; }
 });
 $("#flashcards").addEventListener("click", async () => {
   const result = await message("open-flashcards");

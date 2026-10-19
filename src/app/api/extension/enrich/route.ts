@@ -13,10 +13,10 @@ const schema = z.object({
   context: z.string().max(2000).default(""),
   fields: z.array(z.enum(fields)).min(1).max(fields.length),
   current: z.object({
-    sourceTerm: z.string().max(120).optional(),
-    partOfSpeech: z.string().max(40).optional(),
+    sourceTerm: z.string().max(120).nullish(),
+    partOfSpeech: z.string().max(40).nullish(),
     definitions: z.array(z.string().max(500)).max(6).optional(),
-    ipa: z.string().max(100).optional(),
+    ipa: z.string().max(100).nullish(),
     examples: z.array(z.string().max(500)).max(3).optional(),
     synonyms: z.array(z.string().max(120)).max(12).optional(),
     antonyms: z.array(z.string().max(120)).max(12).optional(),
@@ -57,8 +57,11 @@ export async function POST(request: Request) {
           sourceTerm: { type: "string" }
         }, required: [...fields, "sourceTerm"], additionalProperties: false
       } } }
-    });
+    }, { timeout: 30_000, maxRetries: 0 });
     await recordUsage(session.supabase, "suggestion", response.usage?.input_tokens ?? 0, response.usage?.output_tokens ?? 0, requestId);
+    if (response.status !== "completed" || !response.output_text) {
+      return extensionResponse(request, { error: "AI chưa trả về kết quả đầy đủ. Hãy thử lại với một từ hoặc cụm từ ngắn." }, 502);
+    }
     const decoded = JSON.parse(response.output_text || "{}");
     const result: Record<string, string | string[]> = {};
     if (mode === "vi-en" && !parsed.data.current?.sourceTerm && typeof decoded.sourceTerm === "string") result.sourceTerm = decoded.sourceTerm.trim().slice(0, 120);
@@ -70,7 +73,12 @@ export async function POST(request: Request) {
       else if (Array.isArray(value)) result[field] = value.filter((part): part is string => typeof part === "string" && Boolean(part.trim())).slice(0, field === "definitions" ? 6 : field === "examples" || field === "collocations" ? 6 : 12).map((part) => part.trim().slice(0, 500));
     }
     return extensionResponse(request, { fields: result });
-  } catch {
+  } catch (error) {
+    const detail = error as { name?: string; status?: number; code?: string };
+    console.error("Extension enrichment failed", { name: detail?.name, status: detail?.status, code: detail?.code });
+    if (detail?.name === "APIConnectionTimeoutError") return extensionResponse(request, { error: "AI phản hồi quá 30 giây. Hãy thử lại sau." }, 504);
+    if (detail?.status === 429) return extensionResponse(request, { error: "Dịch vụ AI đang giới hạn lượt gọi hoặc tài khoản API hết hạn mức. Kiểm tra cấu hình API trên server." }, 503);
+    if (detail?.status === 401 || detail?.status === 403) return extensionResponse(request, { error: "Server chưa được cấp quyền gọi AI. Kiểm tra API key và quyền dùng model." }, 503);
     return extensionResponse(request, { error: "Không thể bổ sung thông tin lúc này." }, 502);
   }
 }
