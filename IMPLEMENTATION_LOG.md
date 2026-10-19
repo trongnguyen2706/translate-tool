@@ -2,10 +2,12 @@
 
 Cập nhật: 2026-10-19. Đối chiếu theo [checklist](PLAN_EXTENSION_STEPS.md); chưa đánh dấu hoàn tất bước nào nếu thiếu phép thử ngoài môi trường local.
 
+Mốc code local: commit `e4cb3f0` (`feat: add Chrome dictionary extension foundation`) đã push lên `origin/codex/ai-tags-bulk-delete`. Kiểm thử Chrome được người dùng cho phép nhưng công cụ trình duyệt chặn `chrome://extensions` theo URL policy; không thử đường vòng.
+
 | Bước | Trạng thái | Bằng chứng / việc còn thiếu |
 | --- | --- | --- |
 | S00 | Đang làm | Branch `codex/ai-tags-bulk-delete`. Baseline trước code: `0c0b5b0`; lint/typecheck pass. Hiện lint, typecheck, production build pass. Chưa có staging DB snapshot hoặc hai tài khoản thử. |
-| S01 | Code có, chưa xác minh | Overlay CC, click pause, chọn cụm và resume đã viết. Chưa cài extension/chạy trên YouTube thật; cần xác nhận cài Load unpacked tại thời điểm thử. |
+| S01 | Code có, chưa xác minh | Overlay CC, click pause, chọn cụm và resume đã viết. Chrome URL policy từ chối mở `chrome://extensions`; cần nạp Load unpacked thủ công để thử YouTube thật. |
 | S02 | Pipeline có, dữ liệu chưa có | Builder Kaikki và fixture tests pass (4/4). Chưa tải raw dataset, tạo gói thật, kiểm tra giấy phép/attribution cuối, đo dung lượng/tốc độ/RAM trên Chrome. |
 | S03 | Local pass | MV3 bundle riêng, protocol, IndexedDB và lệnh `check:extension` pass; 4/4 core tests. Chưa có kiểm tra tích hợp trên Chrome. |
 | S04 | Migration viết, chưa áp dụng | Migration 004 có tables, RLS và transactional capture/upsert chỉ điền ô trống. Chưa chạy trên snapshot hoặc kiểm thử rollback/concurrency/RLS vì chưa có staging DB/Docker. |
