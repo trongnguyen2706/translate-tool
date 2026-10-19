@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint .",
     "build:extension": "node scripts/build_extension.mjs",
+    "test:extension-ui": "node tests/extension-ui-server.mjs",
     "check:extension": "node --check extension/src/content.js && node --check extension/src/background.mjs && node --check extension/src/storage.mjs && node --check extension/src/dictionary-core.mjs && node --check extension/src/popup.mjs && node --check extension/src/options.mjs && node tests/extension-core.test.mjs && node tests/extension-network.test.mjs && node tests/extension-install.test.mjs && npm run build:extension",
     "test:dictionaries": "python -m unittest discover -s tests -p \"test_*.py\"",
     "test:dictionary-language": "node tests/dictionary-language.test.mjs"

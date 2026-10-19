@@ -3,12 +3,13 @@
   window.__phrasebookContentStarted = true;
 
   const PROTOCOL = 1;
-  const isYouTube = location.hostname === "www.youtube.com" && location.pathname === "/watch";
+  const isYouTube = location.hostname === "www.youtube.com";
   const videoContext = { video: null, pausedByUs: false, pausedAt: 0 };
-  const state = { config: {}, popup: null, activeWord: null, closeTimer: 0, sequence: 0, selection: null, selectionDirty: false, lastSelectionSignature: "", ignoreClickUntil: 0 };
+  const state = { config: {}, popup: null, activeWord: null, closeTimer: 0, sequence: 0, selection: null, selectionDirty: false, selectionAtPointerDown: "", lastSelectionSignature: "", ignoreClickUntil: 0, hoverWord: null, hoverFrame: 0 };
   const host = document.createElement("div");
   host.id = "phrasebook-extension-root";
-  host.style.cssText = "position:fixed;inset:0;z-index:2147483647;pointer-events:none;";
+  // Keep the overlay out of the player's stacking context in normal/theater view.
+  host.style.cssText = "all:initial!important;position:fixed!important;inset:0!important;display:block!important;z-index:2147483647!important;pointer-events:none!important;isolation:isolate!important;";
   (document.documentElement || document.body).append(host);
   const shadow = host.attachShadow({ mode: "open" });
 
@@ -17,7 +18,7 @@
     :host { all: initial; color-scheme: light; }
     * { box-sizing: border-box; }
     .pbx-action { position:absolute; pointer-events:auto; padding:7px 12px; border:1px solid #bfdbfe; border-radius:8px; background:#eff6ff; color:#1d4ed8; box-shadow:0 5px 18px #0f172a22; font:600 13px/1.2 system-ui,sans-serif; cursor:pointer; }
-    .pbx-card { position:absolute; width:min(360px,calc(100vw - 24px)); max-height:min(520px,calc(100vh - 24px)); overflow:auto; pointer-events:auto; border:1px solid #dbe3ef; border-radius:16px; background:#fff; color:#172554; box-shadow:0 18px 55px #0f172a40; font:14px/1.5 system-ui,sans-serif; }
+    .pbx-card { position:absolute; z-index:1; isolation:isolate; width:min(360px,calc(100vw - 24px)); max-height:min(520px,calc(100vh - 24px)); overflow:auto; pointer-events:auto; border:1px solid #dbe3ef; border-radius:16px; background:#fff; color:#172554; text-shadow:none; box-shadow:0 18px 55px #0f172a40; font:14px/1.5 system-ui,sans-serif; }
     .pbx-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; padding:15px 16px 10px; border-bottom:1px solid #eef2f7; }
     .pbx-term { margin:0; font-size:17px; font-weight:750; overflow-wrap:anywhere; }
     .pbx-meta { margin-top:2px; color:#64748b; font-size:12px; }
@@ -49,9 +50,26 @@
   function modeLabel(mode) { return ({ "en-en": "Anh → Anh", "en-vi": "Anh → Việt", "vi-en": "Việt → Anh" })[mode] ?? "Anh → Việt"; }
 
   function mountPoint() {
-    if (isYouTube) return document.querySelector("#movie_player") || document.documentElement;
-    return document.documentElement;
+    return document.fullscreenElement || document.documentElement;
   }
+
+  function repositionOverlay() {
+    if (state.activeWord && state.popup) {
+      if (state.activeWord.anchor?.isConnected) state.activeWord.rect = state.activeWord.anchor.getBoundingClientRect();
+      place(state.activeWord.rect, state.popup);
+    }
+    const action = shadow.querySelector(".pbx-action");
+    if (action && state.selection) place(state.selection.rect, action);
+  }
+
+  document.addEventListener("fullscreenchange", () => {
+    if (!host.isConnected) return;
+    const target = mountPoint();
+    if (host.parentElement !== target) target.append(host);
+    setHoverWord(null);
+    requestAnimationFrame(repositionOverlay);
+  });
+  window.addEventListener("resize", repositionOverlay);
 
   function place(rect, box) {
     const bounds = host.getBoundingClientRect();
@@ -66,7 +84,7 @@
     box.style.top = `${top}px`;
   }
 
-  function showLookupButton(rect, selectedText, context) {
+  function showLookupButton(rect, selectedText, context, caption = null) {
     const existing = shadow.querySelector(".pbx-action");
     if (existing) existing.remove();
     const button = document.createElement("button");
@@ -74,10 +92,13 @@
     button.type = "button";
     button.textContent = "Tra";
     button.setAttribute("aria-label", `Tra từ ${selectedText}`);
+    // Retain the native selection until click has consumed the captured text.
+    button.addEventListener("mousedown", (event) => event.preventDefault());
     button.addEventListener("click", (event) => {
       event.preventDefault(); event.stopPropagation();
-      state.selection = { term: selectedText, context };
-      void openPopup(selectedText, rect, state.selection);
+      const capture = { term: selectedText, context };
+      if (caption) openFromWord(caption, capture, rect);
+      else void openPopup(selectedText, rect, capture);
       button.remove();
     });
     shadow.append(button);
@@ -111,11 +132,11 @@
   document.addEventListener("mousedown", (event) => {
     if (event.composedPath().includes(host)) return;
     state.selectionDirty = false;
+    state.selectionAtPointerDown = selectionSignature(window.getSelection());
     shadow.querySelector(".pbx-action")?.remove();
   }, true);
 
   document.addEventListener("mouseup", (event) => {
-    if (isYouTube) return;
     if (event.composedPath().includes(host)) return;
     const selection = window.getSelection();
     const text = safeText(selection?.toString()).trim();
@@ -124,11 +145,14 @@
       state.selectionDirty = false;
       return;
     }
-    if (!state.selectionDirty) return;
+    if (!state.selectionDirty && selectionSignature(selection) === state.selectionAtPointerDown && event.detail < 2) return;
     const rect = selection.getRangeAt(0).getBoundingClientRect();
     if (!rect.width && !rect.height) { state.selectionDirty = false; return; }
-    state.selection = { term: text, context: contextAround(selection) };
-    showLookupButton(rect, text, state.selection.context);
+    const caption = isYouTube ? selection.anchorNode?.parentElement?.closest(".ytp-caption-segment") : null;
+    const context = caption ? captionContext() : contextAround(selection);
+    state.selection = { term: text, context, rect };
+    if (caption) state.ignoreClickUntil = Date.now() + 350;
+    showLookupButton(rect, text, context, caption);
     state.selectionDirty = false;
   }, true);
 
@@ -137,8 +161,13 @@
     return saved ?? segment.textContent ?? "";
   }
 
+  function captionContext() {
+    return [...document.querySelectorAll(".ytp-caption-segment")].map(originalCaption).join(" ").replace(/\s+/g, " ").trim().slice(0, 1000);
+  }
+
   function makeInteractive(segment, text) {
-    if (segment.getAttribute("data-pbx-wrapped") === "true" && originalCaption(segment) === text) return;
+    if (segment.getAttribute("data-pbx-wrapped") === "true" && originalCaption(segment) === text &&
+        (segment.querySelector(".pbx-word") || !/[\p{L}\p{M}\p{N}]/u.test(text))) return;
     segment.setAttribute("data-pbx-original", text);
     segment.setAttribute("data-pbx-wrapped", "true");
     segment.replaceChildren();
@@ -150,8 +179,7 @@
         word.tabIndex = 0;
         word.textContent = piece;
         word.dataset.pbxWord = piece;
-        word.addEventListener("pointerenter", () => clearTimeout(state.closeTimer));
-        word.addEventListener("pointerleave", scheduleClose);
+        word.addEventListener("pointerenter", () => setHoverWord(word));
         segment.append(word);
       } else segment.append(document.createTextNode(piece));
     }
@@ -161,9 +189,11 @@
     const segments = document.querySelectorAll(".ytp-caption-segment");
     for (const segment of segments) {
       if (segment.closest("#phrasebook-extension-root")) continue;
-      const text = segment.getAttribute("data-pbx-wrapped") === "true" ? originalCaption(segment) : segment.textContent;
+      // YouTube can reuse a segment and replace only its text between cues.
+      const text = segment.textContent;
       if (text?.trim()) makeInteractive(segment, text);
     }
+    if (state.hoverWord && !state.hoverWord.isConnected) setHoverWord(null);
   }
 
   if (isYouTube) {
@@ -171,34 +201,61 @@
     observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
     activateCaptions();
     document.addEventListener("click", onCaptionClick, true);
+    document.addEventListener("pointermove", onCaptionPointerMove, true);
+    document.addEventListener("pointerout", (event) => { if (!event.relatedTarget) setHoverWord(null); }, true);
+    document.addEventListener("mousedown", (event) => {
+      if (event.target instanceof Element && event.target.closest(".pbx-word")) event.stopPropagation();
+    }, true);
+    document.addEventListener("dblclick", (event) => {
+      if (!event.composedPath().includes(host) && captionWordAt(event)) {
+        event.stopPropagation(); event.stopImmediatePropagation();
+      }
+    }, true);
     document.addEventListener("keydown", (event) => {
       if ((event.key === "Enter" || event.key === " ") && event.target instanceof Element && event.target.matches(".pbx-word")) {
         event.preventDefault(); openFromWord(event.target);
       }
     }, true);
-    document.addEventListener("mouseup", onCaptionSelection, true);
   }
 
-  function onCaptionSelection() {
-    const selection = window.getSelection();
-    const text = safeText(selection?.toString()).trim();
-    if (!text || text.length > 120 || !selection.anchorNode?.parentElement?.closest(".ytp-caption-segment")) return;
-    const rect = selection.getRangeAt(0).getBoundingClientRect();
-    if (!rect.width && !rect.height) return;
-    state.ignoreClickUntil = Date.now() + 350;
-    state.selection = { term: text, context: [...document.querySelectorAll(".ytp-caption-segment")].map(originalCaption).join(" ").slice(0, 1000) };
-    openFromWord(selection.anchorNode.parentElement.closest(".ytp-caption-segment"), state.selection, rect);
+  function captionWordAt(event) {
+    if (!(event.target instanceof Element) || !event.target.closest("#movie_player") || event.target.closest(".ytp-popup")) return null;
+    const direct = event.target.closest(".ytp-caption-segment .pbx-word");
+    if (direct) return direct;
+    return [...document.querySelectorAll(".ytp-caption-segment .pbx-word")].find((candidate) =>
+      [...candidate.getClientRects()].some((rect) => rect.width > 0 && rect.height > 0 && event.clientX >= rect.left && event.clientX <= rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom)
+    ) ?? null;
+  }
+
+  function setHoverWord(word) {
+    if (state.hoverWord === word) return;
+    state.hoverWord?.classList.remove("pbx-hover");
+    state.hoverWord = word;
+    word?.classList.add("pbx-hover");
+    document.querySelector("#movie_player")?.classList.toggle("pbx-word-target", Boolean(word));
+    if (word) clearTimeout(state.closeTimer);
+    else if (state.popup) scheduleClose();
+  }
+
+  function onCaptionPointerMove(event) {
+    // composedPath is only available during dispatch, before the animation frame.
+    const inOverlay = event.composedPath().includes(host);
+    const point = { target: event.target, clientX: event.clientX, clientY: event.clientY };
+    cancelAnimationFrame(state.hoverFrame);
+    state.hoverFrame = requestAnimationFrame(() => {
+      setHoverWord(inOverlay ? null : captionWordAt(point));
+      if (inOverlay) clearTimeout(state.closeTimer);
+    });
   }
 
   function onCaptionClick(event) {
-    const word = event.composedPath().find((node) => node instanceof Element && node.matches?.(".pbx-word"))
-      ?? [...document.querySelectorAll(".ytp-caption-segment .pbx-word")].find((candidate) => {
-        const rect = candidate.getBoundingClientRect();
-        return event.clientX >= rect.left && event.clientX <= rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom;
-      });
-    if (!word || Date.now() < state.ignoreClickUntil) return;
+    if (event.composedPath().includes(host)) return;
+    const word = captionWordAt(event);
+    if (!word) return;
     event.preventDefault(); event.stopPropagation();
     event.stopImmediatePropagation();
+    if (Date.now() < state.ignoreClickUntil) return;
+    shadow.querySelector(".pbx-action")?.remove();
     openFromWord(word);
   }
 
@@ -206,7 +263,7 @@
     const video = document.querySelector("#movie_player video.html5-main-video") || document.querySelector("video");
     if (!video) return;
     const word = selected?.term ?? element.dataset.pbxWord;
-    const sentence = selected?.context ?? [...document.querySelectorAll(".ytp-caption-segment")].map(originalCaption).join(" ").replace(/\s+/g, " ").trim().slice(0, 1000);
+    const sentence = selected?.context ?? captionContext();
     if (state.popup && videoContext.video === video) {
       videoContext.video = video;
     } else {
@@ -218,16 +275,17 @@
       }, { once: true });
       if (!video.paused) video.pause();
     }
-    void openPopup(word, rectOverride ?? element.getBoundingClientRect(), { term: word, context: sentence, pageUrl: location.href, pageTitle: document.title, videoTime: video.currentTime });
+    void openPopup(word, rectOverride ?? element.getBoundingClientRect(), { term: word, context: sentence, pageUrl: location.href, pageTitle: document.title, videoTime: video.currentTime }, element);
   }
 
-  async function openPopup(term, rect, capture) {
+  async function openPopup(term, rect, capture, anchor = null) {
     clearTimeout(state.closeTimer);
     const mode = state.config.mode ?? "en-vi";
-    state.activeWord = { term, rect, capture, mode };
+    state.activeWord = { term, rect, capture, mode, anchor };
     const sequence = ++state.sequence;
     if (!state.popup) createPopup();
     renderLoading(term);
+    place(rect, state.popup);
     let response;
     try {
       response = await send("lookup", { term, mode });
@@ -241,11 +299,11 @@
     const statusTerm = mode === "vi-en" && lookup.result?.senses?.[0]?.sourceTerm ? lookup.result.senses[0].sourceTerm : term;
     renderResult(lookup, { state: "unknown", items: [] });
     const box = shadow.querySelector(".pbx-card");
-    place(rect, box);
+    place(state.activeWord.rect, box);
     void send("read-status", { term: statusTerm, mode }).then((savedStatus) => {
       if (sequence !== state.sequence || state.popup === null || !savedStatus.ok) return;
       renderResult(state.activeWord.lookup ?? lookup, savedStatus.data);
-      place(rect, shadow.querySelector(".pbx-card"));
+      place(state.activeWord.rect, shadow.querySelector(".pbx-card"));
     }).catch(() => {});
   }
 
@@ -490,10 +548,8 @@
       host.remove();
       return;
     }
-    if (isYouTube) {
-      const player = mountPoint();
-      if (player !== host.parentElement) player.append(host);
-    }
+    const target = mountPoint();
+    if (target !== host.parentElement) target.append(host);
   }).catch(() => {});
 
   chrome.storage.onChanged.addListener((changes, area) => {

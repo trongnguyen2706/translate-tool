@@ -14,6 +14,10 @@ npm run test:dictionary-language
 
 The build output is `artifacts/extension/`. The checked-in source remains in `extension/`.
 
+For browser interaction regression checks, run `npm run test:extension-ui` and open `http://127.0.0.1:3001`. This local-only harness serves the real content script and CSS; it substitutes only the YouTube hostname check and mocks Chrome messaging/dictionary results and video playback. **Run interaction checks** covers popup stacking/hit testing, caption selection and hover, stale selection, pause ownership, reused caption DOM, and simulated fullscreen entry/exit. It does not verify auth, real media playback, or real fullscreen rendering. Use **Enter fullscreen** and repeat checks manually when browser automation cannot grant fullscreen. You can also double-click page/caption words or drag across captions to verify the native selection and **Tra** button.
+
+After building an extension update, reload Phrasebook at `chrome://extensions` and refresh existing website/YouTube tabs. Hovering a CC word highlights it; a single click opens its basic definition. Selecting text or double-clicking offers **Tra**; clicking unrelated page content does not reuse an old selection. Normal/theater view keeps the popup outside the player stacking context; fullscreen moves it into the fullscreen element and restores it on exit.
+
 ## Connect a Phrasebook account
 
 In the extension settings, enter the web app origin, Supabase project URL, Supabase publishable/anon key, and a Google OAuth **Web application** client ID. This implementation uses `chrome.identity.launchWebAuthFlow`, so the Chrome Extension OAuth client type is not the client used by this flow. The publishable key is public client configuration; never enter a Supabase secret or service-role key. The user signs in through Google, then the extension verifies the resulting Supabase session against the existing allowed Google account policy.

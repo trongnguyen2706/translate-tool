@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Phrasebook extension interaction regression fixture</title>
+<link rel="stylesheet" href="/content.css">
+<style>
+  body { margin:24px; background:#f1f5f9; color:#172554; font:16px/1.6 system-ui; }
+  button { padding:8px 14px; cursor:pointer; }
+  #movie_player { position:relative; z-index:0; height:340px; width:760px; max-width:100%; background:#334155; overflow:hidden; user-select:none; }
+  #movie_player:fullscreen { width:100vw; height:100vh; }
+  #movie_player video { width:100%; height:100%; }
+  .ytp-caption-window-container { position:absolute; inset:0; pointer-events:none; }
+  .caption-window { position:absolute; bottom:45px; left:10%; z-index:41; pointer-events:auto; }
+  .ytp-caption-segment { background:#000c; color:white; font-size:28px; }
+  .ytp-chrome-bottom { position:absolute; bottom:0; width:100%; height:100px; z-index:59; }
+  .fixture-toolbar { position:absolute; top:10px; left:10px; z-index:2300; color:white; }
+  #page-copy { position:relative; z-index:100; font-size:26px; }
+  #results { white-space:pre-wrap; }
+</style>
+<h1>Extension UI regression fixture</h1>
+<p>Simulated player, dictionary and video state. No network/auth requests. Double-click title or drag captions to select text.</p>
+<div id="movie_player">
+  <video class="html5-main-video"></video>
+  <div class="ytp-caption-window-container"><div class="caption-window"><span class="ytp-caption-segment">accessories specifically for Apple products</span></div></div>
+  <div class="ytp-chrome-bottom"></div>
+  <div class="fixture-toolbar"><button id="fullscreen">Enter fullscreen</button> <button id="run">Run interaction checks</button> <span id="screen-state">Normal view</span></div>
+</div>
+<h2 id="page-copy">Aesthetic unboxing and review</h2>
+<pre id="results" role="status">Ready</pre>
+<script>
+  const calls = [];
+  const playback = { paused:false, resumes:0 };
+  const video = document.querySelector('video');
+  Object.defineProperties(video, {
+    paused: { get:() => playback.paused },
+    currentTime: { get:() => 42 },
+    pause: { value:() => { playback.paused = true; } },
+    play: { value:() => { playback.paused = false; playback.resumes++; video.dispatchEvent(new Event('play')); return Promise.resolve(); } },
+  });
+  window.chrome = {
+    runtime: { sendMessage:async (request) => {
+      calls.push(request);
+      if (request.type === 'get-config') return { ok:true, data:{ mode:'en-vi', appOrigin:'https://phrasebook.invalid' } };
+      if (request.type === 'read-status') return { ok:true, data:{ state:'unknown', items:[] } };
+      if (request.type === 'lookup') return { ok:true, data:{ mode:request.mode, result:{ senses:[
+        { id:'one', partOfSpeech:'adv', definitions:['một cách cụ thể; đặc biệt'], ipa:'/spəˈsɪfɪkli/' },
+        { id:'two', partOfSpeech:'adv', definitions:['chính xác; rõ ràng'] }
+      ] } } };
+      return { ok:false, error:'Fixture does not implement this operation' };
+    } },
+    storage: { onChanged: { addListener() {} } },
+  };
+</script>
+<script src="/content.js"></script>
+<script>
+  const host = document.querySelector('#phrasebook-extension-root');
+  const shadow = host.shadowRoot;
+  const tick = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  const fire = (node, type, options = {}) => node.dispatchEvent(new MouseEvent(type, { bubbles:true, composed:true, ...options }));
+  const escape = () => document.dispatchEvent(new KeyboardEvent('keydown', { key:'Escape', bubbles:true }));
+  const word = () => document.querySelector('[data-pbx-word="specifically"]');
+  const lookupCount = () => calls.filter(call => call.type === 'lookup').length;
+  const selectWord = (node, start, end) => {
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    const range = document.createRange();
+    range.setStart(node.firstChild, start); range.setEnd(node.firstChild, end);
+    selection.addRange(range);
+    document.dispatchEvent(new Event('selectionchange'));
+  };
+  document.querySelector('#fullscreen').onclick = async () => {
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen();
+      else await document.querySelector('#movie_player').requestFullscreen();
+    } catch (error) {
+      document.querySelector('#screen-state').textContent = 'Fullscreen unavailable: ' + error.message;
+    }
+  };
+  document.addEventListener('fullscreenchange', () => {
+    document.querySelector('#screen-state').textContent = document.fullscreenElement ? 'Fullscreen' : 'Normal view';
+    document.querySelector('#fullscreen').textContent = document.fullscreenElement ? 'Exit fullscreen' : 'Enter fullscreen';
+  });
+  document.querySelector('#run').onclick = async () => {
+    const results = [];
+    const check = (condition, name) => { if (!condition) throw new Error(name); results.push('PASS ' + name); };
+    try {
+      escape(); window.getSelection().removeAllRanges();
+      const w = word(); const rect = w.getBoundingClientRect();
+      const point = { clientX:rect.left+rect.width/2, clientY:rect.top+rect.height/2 };
+      check(host.parentElement === (document.fullscreenElement || document.documentElement), 'Overlay mounts outside player except in fullscreen');
+      check(getComputedStyle(w).userSelect === 'text', 'Caption words allow native text selection');
+      check(document.elementFromPoint(point.clientX, point.clientY) === w, 'Caption words are above the player controls');
+      fire(document.querySelector('.ytp-chrome-bottom'), 'pointermove', point); await tick();
+      check(w.classList.contains('pbx-hover'), 'Coordinate hover highlights the exact caption word');
+      await Promise.all(w.getAnimations().map(animation => animation.finished));
+      check(getComputedStyle(w).backgroundColor === 'rgb(37, 99, 235)', 'Hover highlight is visibly blue');
+      playback.paused = false;
+      fire(w, 'click', point); await tick();
+      check(playback.paused && shadow.querySelector('.pbx-definition'), 'Single click pauses video and shows basic definition');
+      const card = shadow.querySelector('.pbx-card'); const box = card.getBoundingClientRect();
+      check(getComputedStyle(card).backgroundColor === 'rgb(255, 255, 255)', 'Popup has an opaque white background');
+      check(document.elementFromPoint(box.left+box.width/2, box.top+box.height/2) === host, 'Popup paints above page text and controls');
+      const before = lookupCount();
+      // A popup control at caption coordinates must not click the word behind it.
+      fire(shadow.querySelector('.pbx-sense'), 'click', point);
+      check(lookupCount() === before, 'Popup clicks cannot trigger a caption underneath');
+      const resumes = playback.resumes; escape();
+      check(!playback.paused && playback.resumes === resumes+1, 'Closing resumes a video paused by the extension');
+      playback.paused = true; fire(w, 'click', point); await tick(); escape();
+      check(playback.paused && playback.resumes === resumes+1, 'A video already paused by the user stays paused');
+      const title = document.querySelector('#page-copy');
+      fire(title, 'mousedown'); selectWord(title, 10, 18); fire(title, 'mouseup', { detail:2 });
+      check(shadow.querySelector('.pbx-action')?.getAttribute('aria-label') === 'Tra từ unboxing', 'Selected YouTube page text offers Tra');
+      shadow.querySelector('.pbx-action').click(); await tick();
+      check(shadow.querySelector('.pbx-term')?.textContent === 'unboxing', 'Tra opens the selected text'); escape();
+      fire(title, 'mousedown'); fire(title, 'mouseup', { detail:1 });
+      check(!shadow.querySelector('.pbx-action'), 'A plain click does not resurrect Tra for an old selection');
+      fire(w, 'mousedown'); selectWord(w, 0, w.textContent.length); fire(w, 'mouseup', { detail:2, ...point }); fire(w, 'click', point);
+      check(shadow.querySelector('.pbx-action') && !shadow.querySelector('.pbx-card'), 'Selecting a caption offers Tra without automatically looking up');
+      playback.paused = false; shadow.querySelector('.pbx-action').click(); await tick();
+      check(playback.paused && shadow.querySelector('.pbx-term')?.textContent === 'specifically', 'Tra on caption selection pauses and opens the selected word');
+      escape(); window.getSelection().removeAllRanges();
+      const segment = w.closest('.ytp-caption-segment');
+      const original = segment.textContent;
+      segment.textContent = 'Rolling captions now'; await tick();
+      check(segment.querySelector('[data-pbx-word="Rolling"]') && segment.dataset.pbxOriginal === 'Rolling captions now', 'Reused caption segments wrap the new cue instead of stale text');
+      segment.textContent = 'Rolling captions now'; await tick();
+      check(segment.querySelector('[data-pbx-word="Rolling"]'), 'Replacing a caption with identical plain text restores interactive words');
+      segment.textContent = original; await tick();
+      if (!document.fullscreenElement) {
+        // Exercise the lifecycle handler even when browser automation lacks a
+        // user activation for real fullscreen. This does not test fullscreen rendering.
+        Object.defineProperty(document, 'fullscreenElement', { configurable:true, value:document.querySelector('#movie_player') });
+        document.dispatchEvent(new Event('fullscreenchange')); await tick();
+        check(host.parentElement === document.querySelector('#movie_player'), 'Simulated fullscreen entry mounts the overlay inside the fullscreen element');
+        delete document.fullscreenElement;
+        document.dispatchEvent(new Event('fullscreenchange')); await tick();
+        check(host.parentElement === document.documentElement, 'Simulated fullscreen exit restores the overlay outside the player');
+      }
+      document.querySelector('#results').textContent = `${results.join('\n')}\n${results.length}/${results.length} checks passed (${document.fullscreenElement ? 'fullscreen' : 'normal'})`;
+      document.querySelector('#screen-state').textContent += ` — ${results.length} checks passed`;
+    } catch (error) {
+      document.querySelector('#results').textContent = results.join('\n') + '\nFAIL ' + error.message;
+      document.querySelector('#screen-state').textContent = 'FAIL ' + error.message;
+    }
+  };
+</script>
+</html>
