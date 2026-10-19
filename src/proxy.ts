@@ -1,6 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextRequest, NextResponse } from "next/server";
-import { hasSupabaseConfig } from "@/lib/config";
+import { hasSupabaseConfig, supabasePublicKey } from "@/lib/config";
 
 export async function proxy(request: NextRequest) {
   if (request.nextUrl.pathname.startsWith("/api/extension/") || request.nextUrl.pathname.startsWith("/dictionaries/")) {
@@ -10,7 +10,7 @@ export async function proxy(request: NextRequest) {
   let response = NextResponse.next({ request });
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    supabasePublicKey()!,
     {
       cookies: {
         getAll() { return request.cookies.getAll(); },

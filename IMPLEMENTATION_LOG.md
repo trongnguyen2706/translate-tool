@@ -37,6 +37,7 @@ Mốc code local: commit `e4cb3f0` (`feat: add Chrome dictionary extension found
 - `git diff --check` — pass; chỉ có cảnh báo đổi LF/CRLF của Git trên Windows.
 - S13 sau thay đổi import/export: lint, `next typegen` + `tsc`, production build, `check:extension` (4/4 core tests), `test:dictionaries` (4/4 fixtures) và `git diff --check` đều pass. Build cần chạy ngoài sandbox để worker Next.js khởi tạo được. Chưa có DB để diễn tập restore.
 - S12 context panel: lint, `next typegen` + `tsc`, production build và `git diff --check` pass; chưa kiểm tra URL YouTube/trang từ một capture thật vì cần extension và migration trên staging.
+- Staging: local URL và publishable key đã nhận; code hiện hỗ trợ `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` cùng biến anon cũ. Lần đăng nhập staging trả `Unsupported provider: missing OAuth secret`, nên cần thêm Google OAuth Client Secret vào Google provider của project trước khi tiếp tục API/restore tests. Không có secret được ghi vào repo/log.
 
 ## Cần cấu hình trước beta
 

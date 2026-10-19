@@ -48,7 +48,7 @@ Mở `http://localhost:3000`. Khi chưa có Supabase config, app hiện trang h�
    ```
 
    Nếu chỉ dùng một người, bỏ dòng email thứ hai. Email phải viết chữ thường. Chỉ chủ project có quyền sửa bảng này.
-3. Trong **Project Settings → API Keys**, lấy Project URL và publishable/anon key. Điền vào `NEXT_PUBLIC_SUPABASE_URL` và `NEXT_PUBLIC_SUPABASE_ANON_KEY` trong `.env.local`. Publishable/anon key được thiết kế để dùng ở client; không dùng `service_role` key.
+3. Trong **Project Settings → API Keys** hoặc **Connect**, lấy Project URL và publishable key. Điền vào `NEXT_PUBLIC_SUPABASE_URL` và `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` trong `.env.local`. App vẫn hỗ trợ biến cũ `NEXT_PUBLIC_SUPABASE_ANON_KEY`. Publishable/anon key dùng ở client; không dùng secret/service-role key.
 4. Trong Google Cloud Console, tạo OAuth Client loại **Web application**. Authorized JavaScript origins gồm `http://localhost:3000` và URL Vercel production. Authorized redirect URI là callback URL hiển thị trong trang cấu hình Google provider của Supabase (thường có dạng `https://<project-ref>.supabase.co/auth/v1/callback`).
 5. Trong Supabase **Authentication → Providers → Google**, bật provider và điền Google Client ID/Secret. Trong **Authentication → URL Configuration**, đặt Site URL của web và cho phép `http://localhost:3000/auth/callback` cùng `https://<domain-production>/auth/callback` trong Redirect URLs.
 6. App đối chiếu email Google với `private.allowed_users` khi đăng nhập, ở mọi API route và trong RLS. Email cần được xác minh bởi Google. Tài khoản chưa có trong bảng sẽ bị từ chối.
