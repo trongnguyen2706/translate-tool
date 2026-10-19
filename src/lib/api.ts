@@ -19,25 +19,25 @@ export function vietnamDayStart() {
 
 export async function checkDailyLimit(
   supabase: NonNullable<Awaited<ReturnType<typeof getAllowedSession>>>["supabase"],
-  userId: string,
-  kind: "translation" | "suggestion"
+  kind: "translation" | "suggestion",
+  requestId: string
 ) {
-  const { count, error } = await supabase.from("usage_events")
-    .select("id", { count: "exact", head: true })
-    .eq("user_id", userId).eq("kind", kind).gte("created_at", vietnamDayStart().toISOString());
+  const { data, error } = await supabase.rpc("reserve_usage_request", {
+    p_request_id: requestId, p_kind: kind, p_limit: dailyLimit(kind)
+  });
   if (error) throw error;
-  return (count ?? 0) < dailyLimit(kind);
+  return data === true;
 }
 
 export async function recordUsage(
   supabase: NonNullable<Awaited<ReturnType<typeof getAllowedSession>>>["supabase"],
-  userId: string,
   kind: "translation" | "suggestion",
   inputTokens: number,
-  outputTokens: number
+  outputTokens: number,
+  requestId: string
 ) {
-  const { error } = await supabase.from("usage_events").insert({
-    user_id: userId, kind, input_tokens: inputTokens, output_tokens: outputTokens
+  const { error } = await supabase.rpc("complete_usage_request", {
+    p_request_id: requestId, p_input_tokens: inputTokens, p_output_tokens: outputTokens
   });
   if (error) throw error;
 }

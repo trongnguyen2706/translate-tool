@@ -29,7 +29,8 @@ export async function POST(request: NextRequest) {
     if (!data || data.length !== ids.length) return apiError("Một số từ không còn trong kho. Hãy tải lại trước khi tiếp tục.", 404);
     const untagged = data.filter((item) => item.tags.length === 0);
     if (!untagged.length) return NextResponse.json({ items: [], skipped: ids.length });
-    if (!await checkDailyLimit(session.supabase, session.user.id, "suggestion")) {
+    const requestId = crypto.randomUUID();
+    if (!await checkDailyLimit(session.supabase, "suggestion", requestId)) {
       return apiError("Đã hết lượt AI hôm nay. Tag đã lưu vẫn được giữ; bạn có thể tiếp tục vào ngày mai.", 429);
     }
 
@@ -54,7 +55,7 @@ export async function POST(request: NextRequest) {
         }
       } }
     });
-    await recordUsage(session.supabase, session.user.id, "suggestion", response.usage?.input_tokens ?? 0, response.usage?.output_tokens ?? 0);
+    await recordUsage(session.supabase, "suggestion", response.usage?.input_tokens ?? 0, response.usage?.output_tokens ?? 0, requestId);
     const result = resultSchema.safeParse(JSON.parse(response.output_text || "{}"));
     if (!result.success) return apiError("AI chưa trả đủ tag hợp lệ. Hãy thử lại lô này.", 502);
     const originals = new Map(untagged.map((item) => [item.id, item]));

@@ -40,7 +40,7 @@ Mở `http://localhost:3000`. Khi chưa có Supabase config, app hiện trang h�
 ## Cấu hình Supabase và Google
 
 1. Tạo một project tại [Supabase](https://supabase.com/dashboard).
-2. Trong SQL Editor, chạy lần lượt [`supabase/migrations/001_initial.sql`](supabase/migrations/001_initial.sql), [`supabase/migrations/002_learning.sql`](supabase/migrations/002_learning.sql), rồi [`supabase/migrations/003_flashcards_tags.sql`](supabase/migrations/003_flashcards_tags.sql). Nếu database đã có các migration trước, chỉ chạy phần còn thiếu theo đúng thứ tự. SQL tạo bảng, bật Row Level Security và bảng email được phép. Sau đó thêm 1–2 email Google của bạn bằng câu lệnh sau (thay email ví dụ):
+2. Trong SQL Editor, chạy migration 001, 002, 003, 004 và 005 theo thứ tự từ `supabase/migrations/`. Nếu database đã có migration trước, chỉ chạy phần còn thiếu theo đúng thứ tự. Hai migration mới thêm capture/occurrences và quota AI atomic. SQL tạo bảng, bật Row Level Security và bảng email được phép. Sau đó thêm 1–2 email Google của bạn bằng câu lệnh sau (thay email ví dụ):
 
    ```sql
    insert into private.allowed_users (email)

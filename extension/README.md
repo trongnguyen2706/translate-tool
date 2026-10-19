@@ -19,7 +19,7 @@ In the extension settings, enter the web app origin, Supabase project URL, Supab
 
 Register the extension's Chrome Identity redirect URL (`chrome.identity.getRedirectURL("supabase-auth")`, shaped like `https://<extension-id>.chromiumapp.org/supabase-auth`) with the Google OAuth client. The Supabase Google provider must accept the web app client ID and extension client ID; Supabase documents comma-separated client IDs with the web client first. Set `CHROME_EXTENSION_IDS` on the server to the exact published extension ID(s) before production use. The extension ID must stay stable between releases.
 
-Run migration `004_extension_capture.sql` after migrations 001–003 before using extension account, status, or capture APIs. The migration is additive and preserves existing vocabulary IDs and flashcard rows. Test it on a disposable database snapshot before applying it to a live project.
+Run migrations `004_extension_capture.sql` and `005_usage_reservations.sql` after migrations 001–003 before using extension APIs or any AI endpoint. They are additive and preserve existing vocabulary IDs and flashcard rows. Test them on a disposable database snapshot before applying them to a live project.
 
 ## Build and host dictionary packs
 

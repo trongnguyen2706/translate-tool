@@ -28,7 +28,8 @@ export async function POST(request: NextRequest) {
   if (!sourceItems || sourceItems.length !== ids.length) return apiError("Có mục từ không tồn tại.", 404);
 
   try {
-    if (!await checkDailyLimit(session.supabase, session.user.id, "suggestion")) {
+    const requestId = crypto.randomUUID();
+    if (!await checkDailyLimit(session.supabase, "suggestion", requestId)) {
       return apiError("Bạn đã hết lượt gợi ý hôm nay.", 429);
     }
     const response = await openaiClient().responses.create({
@@ -45,8 +46,8 @@ export async function POST(request: NextRequest) {
         } } }, required: ["items"], additionalProperties: false }
       } }
     });
+    await recordUsage(session.supabase, "suggestion", response.usage?.input_tokens ?? 0, response.usage?.output_tokens ?? 0, requestId);
     const decoded = JSON.parse(response.output_text || "{}") as { items?: unknown[] };
-    await recordUsage(session.supabase, session.user.id, "suggestion", response.usage?.input_tokens ?? 0, response.usage?.output_tokens ?? 0);
     const validIds = new Set(ids);
     const classified = (decoded.items ?? []).map((item) => classifiedSchema.safeParse(item))
       .filter((result) => result.success).map((result) => result.data)

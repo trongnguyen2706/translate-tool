@@ -1,8 +1,7 @@
 import { z } from "zod";
 import { getAllowedBearerSession } from "@/lib/auth";
-import { dailyLimit } from "@/lib/config";
+import { checkDailyLimit, recordUsage } from "@/lib/api";
 import { extensionOptions, extensionResponse } from "@/lib/extension-api";
-import { vietnamDayStart } from "@/lib/api";
 import { hasOpenAIConfig } from "@/lib/config";
 import { openaiClient, openaiModel } from "@/lib/openai/client";
 
@@ -36,11 +35,10 @@ export async function POST(request: Request) {
   const parsed = schema.safeParse(raw);
   if (!parsed.success) return extensionResponse(request, { error: "Invalid enrichment request" }, 400);
   try {
-    const start = vietnamDayStart().toISOString();
-    const { count, error } = await session.supabase.from("usage_events").select("id", { count: "exact", head: true })
-      .eq("user_id", session.user.id).eq("kind", "suggestion").gte("created_at", start);
-    if (error) throw error;
-    if ((count ?? 0) >= dailyLimit("suggestion")) return extensionResponse(request, { error: "Bạn đã hết lượt AI hôm nay." }, 429);
+    const requestId = crypto.randomUUID();
+    if (!await checkDailyLimit(session.supabase, "suggestion", requestId)) {
+      return extensionResponse(request, { error: "Bạn đã hết lượt AI hôm nay." }, 429);
+    }
 
     const { term, mode, context, fields: requested, current } = parsed.data;
     const response = await openaiClient().responses.create({
@@ -60,6 +58,7 @@ export async function POST(request: Request) {
         }, required: [...fields, "sourceTerm"], additionalProperties: false
       } } }
     });
+    await recordUsage(session.supabase, "suggestion", response.usage?.input_tokens ?? 0, response.usage?.output_tokens ?? 0, requestId);
     const decoded = JSON.parse(response.output_text || "{}");
     const result: Record<string, string | string[]> = {};
     if (mode === "vi-en" && !parsed.data.current?.sourceTerm && typeof decoded.sourceTerm === "string") result.sourceTerm = decoded.sourceTerm.trim().slice(0, 120);
@@ -70,8 +69,6 @@ export async function POST(request: Request) {
       if (field === "ipa" && typeof value === "string" && value.trim()) result[field] = value.trim().slice(0, 100);
       else if (Array.isArray(value)) result[field] = value.filter((part): part is string => typeof part === "string" && Boolean(part.trim())).slice(0, field === "definitions" ? 6 : field === "examples" || field === "collocations" ? 6 : 12).map((part) => part.trim().slice(0, 500));
     }
-    const { error: usageError } = await session.supabase.from("usage_events").insert({ user_id: session.user.id, kind: "suggestion", input_tokens: response.usage?.input_tokens ?? 0, output_tokens: response.usage?.output_tokens ?? 0 });
-    if (usageError) throw usageError;
     return extensionResponse(request, { fields: result });
   } catch {
     return extensionResponse(request, { error: "Không thể bổ sung thông tin lúc này." }, 502);

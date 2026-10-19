@@ -22,7 +22,8 @@ export async function POST(request: NextRequest) {
   const parsed = translateSchema.safeParse(body);
   if (!parsed.success) return apiError("Văn bản cần dịch dài tối đa 12.000 ký tự.");
   try {
-    if (!await checkDailyLimit(session.supabase, session.user.id, "translation")) {
+    const requestId = crypto.randomUUID();
+    if (!await checkDailyLimit(session.supabase, "translation", requestId)) {
       return apiError("Bạn đã hết lượt dịch hôm nay.", 429);
     }
     const response = await openaiClient().responses.create({
@@ -32,9 +33,9 @@ export async function POST(request: NextRequest) {
       max_output_tokens: 6000,
       store: false
     });
+    await recordUsage(session.supabase, "translation", response.usage?.input_tokens ?? 0, response.usage?.output_tokens ?? 0, requestId);
     const translation = response.output_text?.trim();
     if (!translation) return apiError("Chưa nhận được bản dịch. Hãy thử lại.", 502);
-    await recordUsage(session.supabase, session.user.id, "translation", response.usage?.input_tokens ?? 0, response.usage?.output_tokens ?? 0);
     return NextResponse.json({ translation, usage: summarizeCost(response.model, response.usage) }, { headers: { "Cache-Control": "no-store" } });
   } catch {
     return apiError("Không thể dịch lúc này. Hãy thử lại sau.", 502);

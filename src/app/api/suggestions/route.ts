@@ -35,7 +35,8 @@ export async function POST(request: NextRequest) {
   const parsed = suggestionsRequestSchema.safeParse(body);
   if (!parsed.success) return apiError("Nội dung gợi ý không hợp lệ.");
   try {
-    if (!await checkDailyLimit(session.supabase, session.user.id, "suggestion")) {
+    const requestId = crypto.randomUUID();
+    if (!await checkDailyLimit(session.supabase, "suggestion", requestId)) {
       return apiError("Bạn đã hết lượt gợi ý hôm nay.", 429);
     }
     const { text, focusTerm } = parsed.data;
@@ -62,6 +63,7 @@ export async function POST(request: NextRequest) {
         }
       } }
     });
+    await recordUsage(session.supabase, "suggestion", response.usage?.input_tokens ?? 0, response.usage?.output_tokens ?? 0, requestId);
     const decoded = JSON.parse(response.output_text || "{}") as { items?: unknown[] };
     const minLevel = cefrLevels.indexOf(options.currentLevel);
     const seen = new Set<string>();
@@ -85,7 +87,6 @@ export async function POST(request: NextRequest) {
       if (!focusTerm && options.skill !== "all" && !item.ielts_skills.includes(options.skill)) return false;
       return true;
     }).slice(0, options.count);
-    await recordUsage(session.supabase, session.user.id, "suggestion", response.usage?.input_tokens ?? 0, response.usage?.output_tokens ?? 0);
     return NextResponse.json({ items, usage: summarizeCost(response.model, response.usage) }, { headers: { "Cache-Control": "no-store" } });
   } catch {
     return apiError("Không thể tạo gợi ý lúc này. Hãy thử lại sau.", 502);
