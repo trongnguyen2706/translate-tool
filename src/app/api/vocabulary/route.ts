@@ -8,9 +8,20 @@ export const dynamic = "force-dynamic";
 
 const fields = "id,term,kind,source_language,meaning_vi,meaning_en,example,collocations,source_text,note,cefr_level,ielts_relevance,ielts_skills,topics,tags,learning_reason,details,field_provenance,revision,created_at,updated_at";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   const session = await requireApiSession();
   if (!session) return apiError("Bạn cần đăng nhập.", 401);
+  const occurrenceItemId = request.nextUrl.searchParams.get("occurrences");
+  if (occurrenceItemId !== null) {
+    if (!z.uuid().safeParse(occurrenceItemId).success) return apiError("Mục từ không hợp lệ.", 400);
+    const offset = Math.max(0, Number.parseInt(request.nextUrl.searchParams.get("offset") ?? "0", 10) || 0);
+    const { data, error } = await session.supabase.from("vocabulary_occurrences")
+      .select("id,selected_text,context_text,source_url,source_title,source_kind,direction,video_time,created_at")
+      .eq("user_id", session.user.id).eq("vocabulary_item_id", occurrenceItemId)
+      .order("created_at", { ascending: false }).range(offset, offset + 9);
+    if (error) return apiError("Không thể tải ngữ cảnh. Hãy kiểm tra migration 004_extension_capture.sql.", 500);
+    return NextResponse.json({ occurrences: data ?? [], has_more: (data?.length ?? 0) === 10 }, { headers: { "Cache-Control": "no-store" } });
+  }
   const items = [];
   const pageSize = 500;
   for (let offset = 0; ; offset += pageSize) {

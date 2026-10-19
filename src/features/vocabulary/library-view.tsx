@@ -1,7 +1,7 @@
 "use client";
 
-import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDownUp, BookOpen, Download, FileUp, Layers3, LoaderCircle, Plus, Search, Sparkles, Trash2, X } from "lucide-react";
+import { ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ArrowDownUp, BookOpen, Download, ExternalLink, FileUp, Layers3, LoaderCircle, Plus, Search, Sparkles, Trash2, X } from "lucide-react";
 import { usePreferences } from "@/components/preferences-provider";
 import { cefrLevels, ieltsSkills, relevanceLabels, relevanceLabelsEn, skillLabels, topicKeys, topicLabels, topicLabelsEn } from "@/lib/learning";
 import type { Suggestion } from "@/lib/validation";
@@ -65,6 +65,82 @@ async function apiJson<T>(response: Response): Promise<T> {
   const data = await response.json();
   if (!response.ok) throw new Error(data.error || "Có lỗi xảy ra.");
   return data as T;
+}
+
+type Occurrence = {
+  id: string; selected_text: string; context_text: string; source_url: string;
+  source_title: string; source_kind: "youtube" | "web"; direction: "en-en" | "en-vi" | "vi-en";
+  video_time: number | null; created_at: string;
+};
+
+function occurrenceLink(occurrence: Occurrence) {
+  try {
+    const url = new URL(occurrence.source_url);
+    if (occurrence.source_kind === "youtube" && occurrence.video_time !== null) {
+      url.searchParams.set("t", `${Math.floor(occurrence.video_time)}s`);
+    }
+    return url.toString();
+  } catch { return occurrence.source_url; }
+}
+
+function formatVideoTime(seconds: number) {
+  const wholeSeconds = Math.floor(seconds);
+  return `${Math.floor(wholeSeconds / 60)}:${String(wholeSeconds % 60).padStart(2, "0")}`;
+}
+
+function OccurrencesPanel({ itemId }: { itemId: string }) {
+  const { language, t } = usePreferences();
+  const [open, setOpen] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [rows, setRows] = useState<Occurrence[]>([]);
+  const [hasMore, setHasMore] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const load = useCallback(async (offset: number) => {
+    setLoading(true);
+    setError("");
+    try {
+      const result = await apiJson<{ occurrences: Occurrence[]; has_more: boolean }>(
+        await fetch(`/api/vocabulary?occurrences=${encodeURIComponent(itemId)}&offset=${offset}`, { cache: "no-store" })
+      );
+      setRows((current) => offset === 0 ? result.occurrences : [...current, ...result.occurrences]);
+      setHasMore(result.has_more);
+      setLoaded(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("Không thể tải ngữ cảnh.", "Could not load saved contexts."));
+    } finally { setLoading(false); }
+  }, [itemId, t]);
+
+  function toggleOpen() {
+    const next = !open;
+    setOpen(next);
+    if (next && !loaded && !loading) void load(0);
+  }
+
+  return <div className="occurrences-panel">
+    <button type="button" className="source-context-toggle" aria-expanded={open} onClick={toggleOpen}>
+      {open ? t("Ẩn ngữ cảnh", "Hide saved contexts") : t("Ngữ cảnh đã lưu", "Saved contexts")}
+    </button>
+    {open && <div className="occurrence-list">
+      {loading && <p role="status">{t("Đang tải…", "Loading…")}</p>}
+      {error && <p className="occurrence-error">{error}</p>}
+      {!loading && !error && rows.length === 0 && <p>{t("Chưa có ngữ cảnh nào được lưu.", "No saved contexts yet.")}</p>}
+      {rows.map((row) => <article className="occurrence-entry" key={row.id}>
+        <p className="occurrence-context">{row.context_text || row.selected_text}</p>
+        <div className="occurrence-meta">
+          <span>{row.source_title || (row.source_kind === "youtube" ? "YouTube" : t("Trang web", "Website"))}</span>
+          <time dateTime={row.created_at}>{new Intl.DateTimeFormat(language === "en" ? "en" : "vi-VN", { dateStyle: "medium" }).format(new Date(row.created_at))}</time>
+        </div>
+        <a href={occurrenceLink(row)} target="_blank" rel="noreferrer">
+          <ExternalLink size={14} /> {row.source_kind === "youtube" && row.video_time !== null
+            ? t(`Mở video tại ${formatVideoTime(row.video_time)}`, `Open video at ${formatVideoTime(row.video_time)}`)
+            : t("Mở nguồn", "Open source")}
+        </a>
+      </article>)}
+      {hasMore && <button type="button" className="subtle-button occurrence-more" disabled={loading} onClick={() => void load(rows.length)}>{loading ? t("Đang tải…", "Loading…") : t("Tải thêm", "Load more")}</button>}
+    </div>}
+  </div>;
 }
 
 export function LibraryView() {
@@ -395,6 +471,7 @@ export function LibraryView() {
       <div className="learning-tags">{item.cefr_level && <span>{item.cefr_level}</span>}{item.ielts_relevance && <span>{relevance[item.ielts_relevance]}</span>}{item.ielts_skills.map((skill) => <span key={skill}>{skillLabels[skill]}</span>)}{item.topics.map((topic) => <span key={topic}>{topics[topic]}</span>)}{(item.tags ?? []).map((tag) => <span key={`tag:${tag}`}>#{tag}</span>)}</div>
       {item.learning_reason && <p className="learning-reason">{item.learning_reason}</p>}
       {item.collocations.length > 0 && <div className="collocation-list">{item.collocations.map((collocation) => <span key={collocation}>{collocation}</span>)}</div>}
+      <OccurrencesPanel itemId={item.id} />
       {(item.details?.ipa || hasList(item.details?.synonyms) || hasList(item.details?.antonyms)) && <details className="source-details"><summary>{t("Thông tin từ", "Dictionary details")}</summary>
         {typeof item.details.ipa === "string" && item.details.ipa && <p>IPA: {item.details.ipa} {detailsSource(item, "ipa") && <small>· {detailsSource(item, "ipa")}</small>}</p>}
         {hasList(item.details.synonyms) && <p>{t("Đồng nghĩa", "Synonyms")}: {(item.details.synonyms as string[]).join(", ")} {detailsSource(item, "synonyms") && <small>· {detailsSource(item, "synonyms")}</small>}</p>}

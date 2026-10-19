@@ -18,7 +18,7 @@ Mốc code local: commit `e4cb3f0` (`feat: add Chrome dictionary extension found
 | S09 | Code có, chưa xác minh | YouTube overlay/pause/resume có trong source. Chưa kiểm tra CC rolling, SPA, fullscreen, user pause/play, Shorts/PiP. |
 | S10 | Một phần | IndexedDB queue, lease/retry, auth scoping và RPC idempotency đã viết; `queryTerm` trong payload đã được sửa. Chưa thử offline/restart/two-account hoặc cập nhật UI web sau sync. |
 | S11 | Một phần | AI chỉ gọi khi bấm; extension draft và Kho từ bổ sung ô trống theo mode, từng từ hoặc nhóm tối đa 100 mục/lượt, có tiến độ/dừng và optimistic revision check. Migration 005/API đặt chỗ quota nguyên tử cho dịch, gợi ý, phân loại, tag và enrichment; provenance AI được lưu. Chưa có nguồn Dictionary trong web app, cache/request ledger, hoặc kiểm thử DB thật. |
-| S12 | Một phần | Flashcard API/UI không fallback nghĩa giữa ngôn ngữ; extension tạo flashcard trong capture. Kho từ hiển thị IPA/synonyms/antonyms và provenance; chưa có trang occurrences/link video. |
+| S12 | Một phần | Flashcard API/UI không fallback nghĩa giữa ngôn ngữ; extension tạo flashcard trong capture. Kho từ hiển thị IPA/synonyms/antonyms và provenance; mỗi thẻ tải ngữ cảnh theo trang 10 mục và mở lại nguồn/video đúng timestamp. Chưa hiển thị nguồn cho mọi field hoặc kiểm thử link trên dữ liệu Chrome/staging. |
 | S13 | Đang làm | Export/import JSON v4 có details/provenance/revision, dictionary refs, occurrences và remap từ ID cũ sang ID hiện có; vẫn nhận v1–v3. CSV không phụ thuộc cột migration mới. JSON giới hạn 20 MB, CSV 2 MB. Chưa có ZIP/checkpoint, restore diễn tập, hơn 2.000 mục hoặc kiểm thử database/staging; chưa cutover identity. |
 | S14 | Chưa bắt đầu | Chưa chạy kiểm thử multi-user, concurrent, load hoặc offline dài hạn. |
 | S15 | Chưa bắt đầu | Chưa có staging cloud/beta. |
@@ -36,6 +36,7 @@ Mốc code local: commit `e4cb3f0` (`feat: add Chrome dictionary extension found
 - Sau mốc quota, lint, typecheck, production build, extension tests và dictionary fixture tests chạy lại sau API/UI bổ sung Kho từ; migration 004/005 và thao tác với Supabase vẫn chưa được kiểm tra trên database.
 - `git diff --check` — pass; chỉ có cảnh báo đổi LF/CRLF của Git trên Windows.
 - S13 sau thay đổi import/export: lint, `next typegen` + `tsc`, production build, `check:extension` (4/4 core tests), `test:dictionaries` (4/4 fixtures) và `git diff --check` đều pass. Build cần chạy ngoài sandbox để worker Next.js khởi tạo được. Chưa có DB để diễn tập restore.
+- S12 context panel: lint, `next typegen` + `tsc`, production build và `git diff --check` pass; chưa kiểm tra URL YouTube/trang từ một capture thật vì cần extension và migration trên staging.
 
 ## Cần cấu hình trước beta
 

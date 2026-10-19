@@ -288,7 +288,8 @@ Thiết kế và phân tích ảnh hưởng nằm trong [PLAN_EXTENSION.md](PLAN
 **Thực hiện**
 
 - [ ] Thêm vùng Nội dung còn thiếu, lọc theo field và thao tác bổ sung từng từ/nhóm trong UI kho hiện tại.
-- [ ] Hiện nguồn từng trường, danh sách ngữ cảnh có phân trang và link quay lại đúng video/thời điểm.
+- [ ] Hiện nguồn/provenance cho mọi trường dữ liệu.
+- [x] Danh sách ngữ cảnh có phân trang 10 mục và link quay lại nguồn/video tại thời điểm lưu. (Code; cần kiểm tra trên dữ liệu staging.)
 - [ ] Mặt thẻ hiển thị đúng chế độ; thiếu nghĩa thì báo và mở bổ sung, không fallback sang ngôn ngữ khác hoặc chấm nhớ khi thiếu mặt thẻ.
 - [ ] Với lookup Việt–Anh mới, chọn ứng viên Anh làm `term`; câu Việt gốc ở source_text/occurrence. Chỉ dùng câu tiếng Anh phù hợp làm ví dụ Anh, không gắn nhãn câu Việt là English example.
 - [ ] Giữ mục Việt legacy, ngày thêm, tag/CEFR/IELTS và liên kết bộ học; hiển thị nhãn ngôn ngữ chính xác khi chưa đủ dữ liệu để luyện thẻ Anh.
