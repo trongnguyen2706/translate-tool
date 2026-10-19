@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Build small, versioned Phrasebook packs from Kaikki JSONL extracts.
 
-The upstream dumps are intentionally supplied by the operator and are never
-checked into this repository. Only English source entries are selected from
-each edition; Vietnamese -> English is built from explicit translation pairs.
+The upstream dumps are supplied by the operator and never checked into Git.
+Definitions retain their language direction. Vietnamese -> English uses
+explicit translation pairs and optional Vietnamese entries with English glosses;
+English flashcard headwords are attached only when verified in the English index.
 """
 
 from __future__ import annotations
@@ -86,6 +87,14 @@ def senses_for(entry: dict[str, Any], gloss_language: str) -> list[dict[str, Any
             "examples": examples,
             "glossLanguage": gloss_language,
         })
+        for field in ("synonyms", "antonyms", "collocations"):
+            related = []
+            for item in [*sense.get(field, []), *entry.get(field, [])]:
+                word = item.get("word") if isinstance(item, dict) else item
+                if isinstance(word, str) and 0 < len(clean(word)) <= 120 and clean(word) not in related:
+                    related.append(clean(word))
+            if related:
+                output[-1][field] = related[:6 if field == "collocations" else 12]
     return output
 
 
@@ -195,30 +204,21 @@ def write_pack(path: Path, package_id: str, direction: str, index: dict[str, lis
     }
 
 
-def build_staging_database(english_path: Path, vietnamese_path: Path, database_path: Path) -> sqlite3.Connection:
+def insert_staging_sense(database: sqlite3.Connection, direction: str, term: str, sense: dict[str, Any]) -> None:
+    payload = json.dumps(sense, ensure_ascii=False, separators=(",", ":"))
+    database.execute("INSERT OR IGNORE INTO senses(direction, term, sense_id, payload) VALUES(?,?,?,?)",
+                     (direction, key(term), sense["id"], payload))
+
+
+def build_staging_database(english_path: Path, vietnamese_path: Path, database_path: Path, vietnamese_english_path: Path | None = None, progress: bool = False) -> sqlite3.Connection:
     database = sqlite3.connect(database_path)
-    database.execute("PRAGMA journal_mode = WAL")
-    database.execute("PRAGMA synchronous = NORMAL")
+    # This disposable database is rebuilt from source after interruption.
+    database.execute("PRAGMA journal_mode = OFF")
+    database.execute("PRAGMA synchronous = OFF")
+    database.execute("PRAGMA cache_size = -131072")
     database.execute("CREATE TABLE senses (direction TEXT NOT NULL, term TEXT NOT NULL, sense_id TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(direction, term, sense_id, payload)) WITHOUT ROWID")
     database.execute("CREATE INDEX senses_direction_term_idx ON senses(direction, term)")
-
-    def add(direction: str, term: str, sense: dict[str, Any]) -> None:
-        payload = json.dumps(sense, ensure_ascii=False, separators=(",", ":"))
-        database.execute("INSERT OR IGNORE INTO senses(direction, term, sense_id, payload) VALUES(?,?,?,?)",
-                         (direction, key(term), sense["id"], payload))
-
-    for entry in read_jsonl(english_path):
-        if entry.get("lang_code") != "en":
-            continue
-        term = candidate_term(entry.get("word"))
-        if not term:
-            continue
-        for sense in senses_for(entry, "en"):
-            ipa = ipa_for(entry)
-            if ipa:
-                sense["ipa"] = ipa
-            add("en-en", term, sense)
-    database.commit()
+    database.execute("CREATE TABLE form_aliases (alias TEXT NOT NULL, base TEXT NOT NULL, PRIMARY KEY(alias, base)) WITHOUT ROWID")
 
     for entry in read_jsonl(vietnamese_path):
         term = candidate_term(entry.get("word"))
@@ -229,14 +229,87 @@ def build_staging_database(english_path: Path, vietnamese_path: Path, database_p
                 ipa = ipa_for(entry)
                 if ipa:
                     sense["ipa"] = ipa
-                add("en-vi", term, sense)
+                insert_staging_sense(database, "en-vi", term, sense)
         for vi_term, en_term in explicit_translation_pairs(entry):
-            add("vi-en", vi_term, reverse_sense(entry, vi_term, en_term))
+            insert_staging_sense(database, "vi-en", vi_term, reverse_sense(entry, vi_term, en_term))
+    database.commit()
+    native_vi_keys = {row[0] for row in database.execute("SELECT DISTINCT term FROM senses WHERE direction='en-vi'")}
+    translated_vi_keys = set(native_vi_keys)
+    if progress:
+        print(f"English-Vietnamese source: {len(native_vi_keys)} headwords", flush=True)
+
+    for number, entry in enumerate(read_jsonl(english_path), 1):
+        if progress and number % 50000 == 0:
+            print(f"English source: {number} records processed", flush=True)
+        if number % 10000 == 0:
+            database.commit()
+        if entry.get("lang_code") != "en":
+            continue
+        term = candidate_term(entry.get("word"))
+        if not term:
+            continue
+        for sense in senses_for(entry, "en"):
+            ipa = ipa_for(entry)
+            if ipa:
+                sense["ipa"] = ipa
+            insert_staging_sense(database, "en-en", term, sense)
+        for vi_term, en_term in explicit_translation_pairs(entry):
+            insert_staging_sense(database, "vi-en", vi_term, reverse_sense(entry, vi_term, en_term))
+            if key(en_term) not in native_vi_keys:
+                translated = reverse_sense(entry, vi_term, en_term)
+                translated.update(id=f"en-translation:{translated['id']}", definitions=[vi_term], glossLanguage="vi")
+                translated.pop("sourceTerm", None)
+                insert_staging_sense(database, "en-vi", en_term, translated)
+                translated_vi_keys.add(key(en_term))
+        for form in entry.get("forms", []):
+            if isinstance(form, dict) and "table-tags" in form.get("tags", []):
+                continue
+            alias = candidate_term(form.get("form")) if isinstance(form, dict) else None
+            if alias and key(term) in translated_vi_keys and key(alias) != key(term):
+                database.execute("INSERT OR IGNORE INTO form_aliases VALUES (?,?)", (key(alias), key(term)))
+        for sense in entry.get("senses", []):
+            for reference in sense.get("form_of", []):
+                base = candidate_term(reference.get("word")) if isinstance(reference, dict) else None
+                if base and key(base) in translated_vi_keys and key(base) != key(term):
+                    database.execute("INSERT OR IGNORE INTO form_aliases VALUES (?,?)", (key(term), key(base)))
+    database.commit()
+    return finish_staging_database(database, vietnamese_english_path, progress)
+
+
+def finish_staging_database(database: sqlite3.Connection, vietnamese_english_path: Path | None = None, progress: bool = False) -> sqlite3.Connection:
+    database.execute("CREATE INDEX IF NOT EXISTS form_aliases_base_idx ON form_aliases(base)")
+    if progress:
+        print("Joining English-Vietnamese form aliases", flush=True)
+    database.execute("""CREATE TEMP TABLE alias_senses AS
+        SELECT f.alias, f.base, s.sense_id, s.payload FROM form_aliases f
+        JOIN senses s ON s.direction='en-vi' AND s.term=f.base
+        WHERE NOT EXISTS (SELECT 1 FROM senses e WHERE e.direction='en-vi' AND e.term=f.alias)""")
+    database.execute("""INSERT OR IGNORE INTO senses(direction,term,sense_id,payload)
+        SELECT 'en-vi', alias, sense_id, json_set(payload, '$.formOf', base) FROM alias_senses""")
+    database.execute("DROP TABLE alias_senses")
+    database.commit()
+    if progress:
+        print("English source and inflected English-Vietnamese forms complete", flush=True)
+
+    if vietnamese_english_path:
+        for entry in read_jsonl(vietnamese_english_path):
+            if entry.get("lang_code") != "vi":
+                continue
+            term = candidate_term(entry.get("word"))
+            if not term:
+                continue
+            for sense in senses_for(entry, "en"):
+                english_headword = candidate_term(sense["definitions"][0])
+                if english_headword and database.execute("SELECT 1 FROM senses WHERE direction='en-en' AND term=? LIMIT 1", (key(english_headword),)).fetchone():
+                    sense["sourceTerm"] = english_headword
+                sense["id"] = f"enwiktionary-vi:{sense['id']}"
+                insert_staging_sense(database, "vi-en", term, sense)
+        database.commit()
     database.commit()
     return database
 
 
-def write_chunked_packages(database: sqlite3.Connection, out_dir: Path, chunk_size: int = 5000) -> list[dict[str, Any]]:
+def write_chunked_packages(database: sqlite3.Connection, out_dir: Path, chunk_size: int = 5000, data_version: str = DATA_VERSION, progress: bool = False) -> list[dict[str, Any]]:
     packages = []
     source_names = {
         "en-en": ["Kaikki English Wiktionary"],
@@ -257,6 +330,8 @@ def write_chunked_packages(database: sqlite3.Connection, out_dir: Path, chunk_si
             if buffer and (len(buffer) >= chunk_size or buffer_bytes + entry_bytes > 2 * 1024 * 1024):
                 chunks.append(write_stream_chunk(out_dir, direction, chunk_number, buffer))
                 chunk_number += 1
+                if progress and chunk_number % 50 == 0:
+                    print(f"Packing {direction}: {sum(chunk['entryCount'] for chunk in chunks)} keys", flush=True)
                 buffer = {}
                 buffer_bytes = 0
             if entry_bytes > 2 * 1024 * 1024:
@@ -267,12 +342,14 @@ def write_chunked_packages(database: sqlite3.Connection, out_dir: Path, chunk_si
             chunks.append(write_stream_chunk(out_dir, direction, chunk_number, buffer))
         packages.append({
             "packageId": f"phrasebook-{direction}", "direction": direction,
-            "schemaVersion": SCHEMA_VERSION, "dataVersion": DATA_VERSION,
+            "schemaVersion": SCHEMA_VERSION, "dataVersion": data_version,
             "contentType": "application/x-ndjson+gzip", "entryCount": sum(chunk["entryCount"] for chunk in chunks),
             "compressedBytes": sum(chunk["compressedBytes"] for chunk in chunks),
             "chunks": chunks, "sources": source_names[direction],
             "license": "CC BY-SA 4.0 / GFDL; retain upstream attribution and comply with share-alike terms.",
         })
+        if progress:
+            print(f"Packed {direction}: {packages[-1]['entryCount']} keys", flush=True)
     return packages
 
 
@@ -298,14 +375,20 @@ def main() -> int:
     parser.add_argument("--vietnamese", type=Path, required=True, help="Kaikki Vietnamese Wiktionary JSONL")
     parser.add_argument("--out", type=Path, default=Path("artifacts/dictionaries"))
     parser.add_argument("--english-source", default="Kaikki English Wiktionary", help="Attribution name for the English input edition")
+    parser.add_argument("--vietnamese-english", type=Path, help="Vietnamese entries with English glosses from English Wiktionary")
+    parser.add_argument("--data-version", default=DATA_VERSION)
+    parser.add_argument("--progress", action="store_true")
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
     database_path = args.out / ".dictionary-build.sqlite"
     try:
-        if database_path.exists(): database_path.unlink()
-        database = build_staging_database(args.english, args.vietnamese, database_path)
-        packs = write_chunked_packages(database, args.out)
+        for staging_file in (database_path, Path(str(database_path) + "-wal"), Path(str(database_path) + "-shm")):
+            staging_file.unlink(missing_ok=True)
+        database = build_staging_database(args.english, args.vietnamese, database_path, args.vietnamese_english, args.progress)
+        packs = write_chunked_packages(database, args.out, data_version=args.data_version, progress=args.progress)
         packs[0]["sources"] = [args.english_source]
+        if args.vietnamese_english:
+            packs[2]["sources"].append("Kaikki English Wiktionary; Vietnamese entries with English definitions")
         database.close()
         database_path.unlink(missing_ok=True)
         Path(str(database_path) + "-wal").unlink(missing_ok=True)
@@ -314,7 +397,7 @@ def main() -> int:
         print(error, file=sys.stderr)
         if database_path.exists(): database_path.unlink(missing_ok=True)
         return 1
-    manifest = {"schemaVersion": SCHEMA_VERSION, "dataVersion": DATA_VERSION, "packages": packs}
+    manifest = {"schemaVersion": SCHEMA_VERSION, "dataVersion": args.data_version, "packages": packs}
     manifest_path = args.out / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"Wrote {len(packs)} packs to {args.out}; manifest: {manifest_path}")

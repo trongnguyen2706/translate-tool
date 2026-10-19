@@ -9,6 +9,7 @@ From the repository root run:
 ```powershell
 npm run check:extension
 npm run test:dictionaries
+npm run test:dictionary-language
 ```
 
 The build output is `artifacts/extension/`. The checked-in source remains in `extension/`.
@@ -33,7 +34,7 @@ Review upstream license and attribution requirements before distributing a pack.
 
 ## Current limits
 
-The repo contains the build pipeline and local extension source, but no full dictionary data. YouTube CC rendering, sign-in, database RPCs, and offline restart behavior still require the staged browser/database checks recorded in `IMPLEMENTATION_LOG.md` before a release claim.
+The checked-in repository contains the build pipeline and extension source; generated dictionary data is installed separately. YouTube CC rendering, sign-in, database RPCs, and offline restart behavior still require the staged browser/database checks recorded in `IMPLEMENTATION_LOG.md` before a release claim.
 
 ## Install dictionaries in local staging
 
@@ -49,3 +50,18 @@ npm run dev
 In extension settings set **Dictionary manifest URL** to `http://localhost:3000/dictionaries/manifest.json` and save. Open the extension toolbar popup, select a mode, click **Tải từ điển cho chế độ này**, and wait for the installed-entry count. Repeat for the other modes. Keep the popup open until installation finishes. Once installed, lookup uses IndexedDB and does not need the local server. AI and cloud sync still need the web server.
 
 Generated source and dictionary data are ignored by Git. The local URL works only on this machine; for other users publish the generated manifest, chunks, and source attribution together on an HTTPS host such as the planned R2 domain.
+
+## Expanded dictionaries and installing all modes
+
+For expanded coverage, use the full [English extract](https://kaikki.org/dictionary/English/kaikki.org-dictionary-English.jsonl.gz) and [Vietnamese entries with English definitions](https://kaikki.org/dictionary/Vietnamese/kaikki.org-dictionary-Vietnamese.jsonl.gz), plus the Vietnamese-edition extract above. Keep all three under `artifacts/dictionary-sources/` and build a new data version:
+
+```powershell
+python scripts/build_dictionaries.py --english artifacts/dictionary-sources/english-full.jsonl.gz --vietnamese artifacts/dictionary-sources/vi-extract.jsonl.gz --vietnamese-english artifacts/dictionary-sources/vietnamese-english-full.jsonl.gz --data-version 2026.10.19.3-full --progress --out artifacts/dictionaries-full
+python scripts/publish_local_dictionaries.py --source artifacts/dictionaries-full
+```
+
+The publisher validates every chunk, preserves immutable version directories, writes attribution, and switches the root manifest after all files pass validation. Use a new version whenever package contents change. English-Vietnamese includes native definitions, explicit Vietnamese translations from the English edition for missing headwords, and verified inflected-form links. Vietnamese-English adds English definitions of Vietnamese words; if a canonical English headword is not explicitly available, lookup still works and the user can request AI before saving an English flashcard.
+
+In the extension toolbar popup click **Tải / cập nhật cả 3 bộ từ điển**. The selected lookup mode stays the same. Progress is reported by verified chunks and entry counts. Keep the popup open; after a network/browser interruption, click the same button again to resume verified chunks and skip ready packages. A new version only replaces the active dictionary for that mode after installation completes. Full word entries may contain up to 1,000 senses within the existing 2 MiB chunk bound; no additional extension permissions are requested.
+
+AI enrichment snapshots the lookup mode and declares the definition language explicitly: Vietnamese definitions for English-Vietnamese, English definitions for the other modes. Obvious wrong-language output is rejected before it reaches the popup or vocabulary storage. Language checking is conservative rather than a complete language detector. Changing the mode closes the previous draft so it cannot be relabeled under another mode.

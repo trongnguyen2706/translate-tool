@@ -50,6 +50,15 @@ export async function getActivePackage(direction) {
   });
 }
 
+export async function getPackage(packageId) {
+  const db = await openDatabase();
+  return new Promise((resolve, reject) => {
+    const request = db.transaction("packages").objectStore("packages").get(packageId);
+    request.onsuccess = () => resolve(request.result ?? null);
+    request.onerror = () => reject(request.error);
+  });
+}
+
 export async function getEntry(packageId, term) {
   const db = await openDatabase();
   return new Promise((resolve, reject) => {

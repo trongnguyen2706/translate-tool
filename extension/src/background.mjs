@@ -1,9 +1,10 @@
 import { lookupFromIndex, normalizeLookupTerm, normalizeMode } from "./dictionary-core.mjs";
-import { getActivePackage, getEntry, listQueue, openDatabase, putQueueItem, transaction } from "./storage.mjs";
+import { getActivePackage, getPackage, getEntry, listQueue, openDatabase, putQueueItem, transaction } from "./storage.mjs";
 import { requestJson } from "./network.mjs";
 
 const APP_ORIGIN_DEFAULT = "http://localhost:3000";
 const MODES = { "en-en": "phrasebook-en-en", "en-vi": "phrasebook-en-vi", "vi-en": "phrasebook-vi-en" };
+const dictionaryInstalls = new Map();
 chrome.runtime.onInstalled.addListener(() => {
   void openDatabase();
   chrome.alarms.create("phrasebook-sync", { periodInMinutes: 2 });
@@ -34,7 +35,7 @@ async function handleMessage(message, sender) {
       await chrome.storage.local.set({ mode });
       return { mode };
     }
-    case "install-dictionary": return installDictionary(message.manifestUrl, message.mode);
+    case "install-dictionary": return installDictionaryOnce(message.manifestUrl, message.mode);
     case "open-flashcards": {
       const config = await chrome.storage.local.get(["appOrigin"]);
       const origin = validateAppOrigin(config.appOrigin ?? APP_ORIGIN_DEFAULT);
@@ -234,10 +235,18 @@ function validateAuthConfig(value) {
   return { appOrigin, supabaseUrl: supabaseUrl.origin, googleClientId, supabaseAnonKey };
 }
 
+async function installDictionaryOnce(manifestUrl, modeInput) {
+  const mode = normalizeMode(modeInput);
+  if (dictionaryInstalls.has(mode)) return dictionaryInstalls.get(mode);
+  const work = installDictionary(manifestUrl, mode).finally(() => dictionaryInstalls.delete(mode));
+  dictionaryInstalls.set(mode, work);
+  return work;
+}
+
 async function installDictionary(manifestUrl, modeInput) {
   const mode = normalizeMode(modeInput);
   const url = validateHttpsUrl(manifestUrl);
-  const response = await fetch(url, { cache: "no-store" });
+  const response = await fetch(url, { cache: "no-store", signal: AbortSignal.timeout(20_000) });
   if (!response.ok) throw new Error(`Không tải được manifest (${response.status})`);
   const manifest = await response.json();
   if (manifest.schemaVersion !== 1 || !Array.isArray(manifest.packages)) throw new Error("Phiên bản manifest không được hỗ trợ");
@@ -248,15 +257,29 @@ async function installDictionary(manifestUrl, modeInput) {
     throw new Error("Danh sách gói từ điển không hợp lệ");
   }
   const packageId = `${pack.packageId}@${pack.dataVersion}`;
-  await transaction(["entries", "packages"], "readwrite", (tx) => {
-    tx.objectStore("packages").put({ packageId, direction: mode, dataVersion: pack.dataVersion, state: "installing", active: false, installedAt: new Date().toISOString() });
-  });
+  if (!Number.isInteger(pack.entryCount) || chunks.reduce((total, chunk) => total + chunk.entryCount, 0) !== pack.entryCount) throw new Error("Số mục trong manifest không khớp");
+  const fingerprintBytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(chunks)));
+  const fingerprint = [...new Uint8Array(fingerprintBytes)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  const existing = await getPackage(packageId);
+  if (existing?.fingerprint && existing.fingerprint !== fingerprint) throw new Error("Nội dung từ điển đã đổi nhưng chưa tăng phiên bản dữ liệu.");
+  if (existing?.state === "ready" && existing.active) {
+    return { mode, dataVersion: pack.dataVersion, entryCount: pack.entryCount, compressedBytes: pack.compressedBytes, alreadyInstalled: true };
+  }
+  let completedChunks = existing?.fingerprint === fingerprint && Number.isInteger(existing.completedChunks) && existing.completedChunks >= 0 && existing.completedChunks <= chunks.length ? existing.completedChunks : 0;
+  let installedEntries = chunks.slice(0, completedChunks).reduce((total, chunk) => total + chunk.entryCount, 0);
+  const checkpoint = () => ({ packageId, direction: mode, dataVersion: pack.dataVersion, fingerprint, state: "installing", active: false, completedChunks, installedEntries, installedAt: new Date().toISOString() });
+  const report = (state, error = "") => chrome.storage.local.set({ dictionaryProgress: { mode, state, completedChunks, totalChunks: chunks.length, installedEntries, totalEntries: pack.entryCount, error } });
+  await transaction(["packages"], "readwrite", (tx) => tx.objectStore("packages").put(checkpoint()));
+  await report("installing");
   try {
     let checksum = "";
-    let installedEntries = 0;
-    for (const chunk of chunks) {
+    for (let index = completedChunks; index < chunks.length; index += 1) {
+      const chunk = chunks[index];
       checksum = await installChunk(chunk, url, packageId);
       installedEntries += chunk.entryCount;
+      completedChunks = index + 1;
+      await transaction(["packages"], "readwrite", (tx) => tx.objectStore("packages").put(checkpoint()));
+      await report("installing");
     }
     if (installedEntries !== pack.entryCount) throw new Error("Số mục từ điển không khớp manifest");
     await transaction(["entries", "packages"], "readwrite", (tx) => {
@@ -266,21 +289,15 @@ async function installDictionary(manifestUrl, modeInput) {
         const cursor = cursorRequest.result;
         if (!cursor) return;
         const current = cursor.value;
-        if (current.direction === mode) cursor.update({ ...current, active: false });
+        if (current.direction === mode && current.packageId !== packageId) cursor.update({ ...current, active: false });
         cursor.continue();
       };
-      packages.put({ packageId, direction: mode, dataVersion: pack.dataVersion, state: "ready", active: true, installedAt: new Date().toISOString(), compressedBytes: pack.compressedBytes, checksum });
+      packages.put({ ...checkpoint(), state: "ready", active: true, compressedBytes: pack.compressedBytes, checksum });
     });
+    await report("ready");
     return { mode, dataVersion: pack.dataVersion, entryCount: installedEntries, compressedBytes: pack.compressedBytes };
   } catch (error) {
-    await transaction(["entries", "packages"], "readwrite", (tx) => {
-      tx.objectStore("entries").index("by-package").openCursor(IDBKeyRange.only(packageId)).onsuccess = (event) => {
-        const cursor = event.target.result;
-        if (!cursor) return;
-        cursor.delete(); cursor.continue();
-      };
-      tx.objectStore("packages").delete(packageId);
-    });
+    await report("interrupted", error instanceof Error ? error.message : String(error));
     throw error;
   }
 }
@@ -288,7 +305,7 @@ async function installDictionary(manifestUrl, modeInput) {
 async function installChunk(chunk, manifestUrl, packageId) {
   const chunkUrl = new URL(chunk.url, manifestUrl);
   if (chunkUrl.origin !== new URL(manifestUrl).origin) throw new Error("Gói từ điển phải cùng domain với manifest");
-  const response = await fetch(chunkUrl);
+  const response = await fetch(chunkUrl, { signal: AbortSignal.timeout(30_000) });
   if (!response.ok) throw new Error(`Không tải được gói (${response.status})`);
   const compressed = await readBoundedBody(response, 8 * 1024 * 1024);
   if (chunk.compressedBytes && compressed.byteLength !== chunk.compressedBytes) throw new Error("Kích thước gói từ điển không khớp manifest");
@@ -347,7 +364,8 @@ async function readBoundedBody(response, maxBytes) {
 
 function readDictionaryLine(line, packageId) {
   const entry = JSON.parse(line);
-  if (typeof entry.term !== "string" || entry.term.length > 120 || !Array.isArray(entry.senses) || entry.senses.length > 100) {
+  const language = packageId.startsWith("phrasebook-en-vi@") ? "vi" : "en";
+  if (typeof entry.term !== "string" || entry.term.length > 120 || !Array.isArray(entry.senses) || entry.senses.length > 1000 || entry.senses.some((sense) => sense.glossLanguage && sense.glossLanguage !== language)) {
     throw new Error("Dòng từ điển không hợp lệ");
   }
   return { packageId, term: entry.term, senses: entry.senses };

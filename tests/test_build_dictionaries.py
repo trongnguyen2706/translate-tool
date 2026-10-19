@@ -62,6 +62,22 @@ class DictionaryBuildTests(unittest.TestCase):
         finally:
             compressed.unlink(missing_ok=True)
 
+    def test_full_sources_keep_translation_direction_and_resolve_explicit_inflections(self):
+        fixtures = Path(__file__).parent / "fixtures"
+        database = builder.build_staging_database(fixtures / "dictionary-english-full.jsonl", fixtures / "dictionary-vietnamese.jsonl", ":memory:", fixtures / "dictionary-vietnamese-english.jsonl")
+        try:
+            payload = database.execute("SELECT payload FROM senses WHERE direction='en-vi' AND term='restructured'").fetchone()[0]
+            self.assertEqual(json.loads(payload)["definitions"], ["tái cơ cấu"])
+            self.assertEqual(json.loads(payload)["glossLanguage"], "vi")
+            self.assertEqual(json.loads(payload)["formOf"], "restructure")
+            self.assertIsNone(database.execute("SELECT 1 FROM senses WHERE term='no-table-tags'").fetchone())
+            bank = database.execute("SELECT payload FROM senses WHERE direction='vi-en' AND term='ngân hàng' AND sense_id LIKE 'enwiktionary-vi:%'").fetchone()[0]
+            self.assertEqual(json.loads(bank)["sourceTerm"], "bank")
+            concept = database.execute("SELECT payload FROM senses WHERE direction='vi-en' AND term='khái niệm'").fetchone()[0]
+            self.assertNotIn("sourceTerm", json.loads(concept))
+        finally:
+            database.close()
+
 
 if __name__ == "__main__":
     unittest.main()
