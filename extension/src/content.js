@@ -223,11 +223,11 @@
 
   async function openPopup(term, rect, capture) {
     clearTimeout(state.closeTimer);
-    state.activeWord = { term, rect, capture };
+    const mode = state.config.mode ?? "en-vi";
+    state.activeWord = { term, rect, capture, mode };
     const sequence = ++state.sequence;
     if (!state.popup) createPopup();
     renderLoading(term);
-    const mode = state.config.mode ?? "en-vi";
     let response;
     try {
       response = await send("lookup", { term, mode });
@@ -266,7 +266,7 @@
   function renderLoading(term) {
     state.popup.innerHTML = `<div class="pbx-head"><div><h2 class="pbx-term"></h2><div class="pbx-meta"></div></div><button class="pbx-close" aria-label="Đóng">×</button></div><div class="pbx-content"><p>Đang tra từ điển trên máy…</p></div><div class="pbx-status" role="status"></div>`;
     state.popup.querySelector(".pbx-term").textContent = term;
-    state.popup.querySelector(".pbx-meta").textContent = modeLabel(state.config.mode ?? "en-vi");
+    state.popup.querySelector(".pbx-meta").textContent = modeLabel(state.activeWord.mode);
     state.popup.querySelector(".pbx-close").addEventListener("click", closePopup);
   }
 
@@ -309,13 +309,16 @@
           option.textContent = `${item.partOfSpeech ? `${item.partOfSpeech}: ` : ""}${item.definitions?.[0] ?? `Nghĩa ${index + 1}`}`;
           select.append(option);
         });
+        select.value = String(Math.max(0, senses.indexOf(sense)));
         select.addEventListener("change", () => {
           active.selectedSense = senses[Number(select.value)];
+          active.enrichmentStatus = "";
+          active.enrichmentError = false;
           renderResult(lookup, { state: "checking", items: [] });
           const savedTerm = mode === "vi-en" && active.selectedSense?.sourceTerm ? active.selectedSense.sourceTerm : active.term;
           const sequence = state.sequence;
           void send("read-status", { term: savedTerm, mode }).then((response) => {
-            if (sequence === state.sequence && state.popup && response.ok) renderResult(lookup, response.data);
+            if (sequence === state.sequence && active === state.activeWord && state.popup && response.ok) renderResult(active.lookup ?? lookup, response.data);
           });
         });
         content.append(select);
@@ -325,6 +328,7 @@
       content.append(definition);
       if (sense?.examples?.[0]) { const example = document.createElement("p"); example.className = "pbx-example"; example.textContent = sense.examples[0]; content.append(example); }
       const missing = getMissing(sense);
+      if (mode === "vi-en" && !sense?.sourceTerm) missing.push("từ tiếng Anh để tạo flashcard (bấm Bổ sung bằng AI)");
       if (missing.length) { const note = document.createElement("p"); note.className = "pbx-missing"; note.textContent = `Chưa có: ${missing.join(", ")}.`; content.append(note); }
       content.append(makeButton(active.enriching ? "AI đang xử lý…" : "Bổ sung bằng AI", "pbx-btn", () => requestEnrichment(active, mode, sense), Boolean(active.enriching)));
     }
@@ -396,6 +400,7 @@
   async function requestEnrichment(active, mode, sense) {
     if (active.enriching || active !== state.activeWord) return;
     const fields = getMissing(sense).map((field) => ({ nghĩa: "definitions", IPA: "ipa", "ví dụ": "examples", "đồng nghĩa": "synonyms", "trái nghĩa": "antonyms", "cụm từ đi kèm": "collocations" })[field]).filter(Boolean);
+    if (!fields.length && mode === "vi-en" && !sense?.sourceTerm) fields.push("definitions");
     if (!fields.length) {
       active.enrichmentStatus = "Mục từ này đã có đủ thông tin; không cần gọi AI.";
       renderResult(active.lookup, active.saved ?? { state: "unknown", items: [] });
@@ -410,8 +415,10 @@
       const result = await send("enrich", { term: active.term, mode, context: active.capture.context, fields, current: sense ?? {} });
       if (active !== state.activeWord || !state.popup) return;
       if (!result.ok) throw new Error(result.error || "Không thể bổ sung bằng AI");
+      if (result.data?.mode !== mode || result.data?.definitionLanguage !== (mode === "en-vi" ? "vi" : "en")) throw new Error("Kết quả AI không khớp chế độ tra. Hãy tải lại extension và thử lại.");
       const additions = result.data?.fields ?? {};
       const enrichedSense = { definitions: [], examples: [], synonyms: [], antonyms: [], collocations: [], ...sense };
+      enrichedSense.glossLanguage = result.data.definitionLanguage;
       if (!enrichedSense.sourceTerm && typeof additions.sourceTerm === "string" && additions.sourceTerm.trim()) enrichedSense.sourceTerm = additions.sourceTerm.trim();
       for (const [field, value] of Object.entries(additions)) {
         if (field === "sourceTerm") continue;
@@ -490,6 +497,10 @@
   }).catch(() => {});
 
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === "local" && changes.mode) state.config.mode = changes.mode.newValue ?? "en-vi";
+    if (area === "local" && changes.mode) {
+      state.config.mode = changes.mode.newValue ?? "en-vi";
+      closePopup();
+      shadow.querySelector(".pbx-action")?.remove();
+    }
   });
 })();
