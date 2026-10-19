@@ -19,16 +19,19 @@ export async function GET(request: NextRequest) {
       "Cache-Control": "no-store"
     } });
   }
-  const vocabulary = [];
+  const vocabulary: Record<string, unknown>[] = [];
   const translations = [];
+  const isCsv = request.nextUrl.searchParams.get("format") === "csv";
   const pageSize = 500;
   for (let offset = 0; ; offset += pageSize) {
     const { data, error } = await session.supabase.from("vocabulary_items")
-      .select("id,term,kind,source_language,meaning_vi,meaning_en,example,collocations,source_text,note,cefr_level,ielts_relevance,ielts_skills,topics,tags,learning_reason,created_at,updated_at")
+      .select(isCsv
+        ? "id,term,kind,source_language,meaning_vi,meaning_en,example,collocations,source_text,note,cefr_level,ielts_relevance,ielts_skills,topics,tags,learning_reason,created_at,updated_at"
+        : "id,term,kind,source_language,meaning_vi,meaning_en,example,collocations,source_text,note,cefr_level,ielts_relevance,ielts_skills,topics,tags,learning_reason,details,field_provenance,revision,created_at,updated_at")
       .eq("user_id", session.user.id).order("created_at", { ascending: false })
       .order("id", { ascending: false }).range(offset, offset + pageSize - 1);
     if (error) return apiError("Không thể xuất dữ liệu.", 500);
-    vocabulary.push(...(data ?? []));
+    vocabulary.push(...((data ?? []) as unknown as Record<string, unknown>[]));
     if (!data || data.length < pageSize) break;
   }
   if (request.nextUrl.searchParams.get("format") !== "csv") {
@@ -39,6 +42,27 @@ export async function GET(request: NextRequest) {
         .order("id", { ascending: false }).range(offset, offset + pageSize - 1);
       if (error) return apiError("Không thể xuất dữ liệu.", 500);
       translations.push(...(data ?? []));
+      if (!data || data.length < pageSize) break;
+    }
+  }
+
+  const identityRefs = [];
+  const occurrences = [];
+  if (request.nextUrl.searchParams.get("format") !== "csv") {
+    for (let offset = 0; ; offset += pageSize) {
+      const { data, error } = await session.supabase.from("vocabulary_identity_refs")
+        .select("id,vocabulary_item_id,provider,source_reference,dataset_version,created_at")
+        .eq("user_id", session.user.id).order("created_at", { ascending: true }).range(offset, offset + pageSize - 1);
+      if (error) return apiError("Không thể xuất liên kết từ điển. Hãy kiểm tra migration 004_extension_capture.sql.", 500);
+      identityRefs.push(...(data ?? []));
+      if (!data || data.length < pageSize) break;
+    }
+    for (let offset = 0; ; offset += pageSize) {
+      const { data, error } = await session.supabase.from("vocabulary_occurrences")
+        .select("id,vocabulary_item_id,operation_id,selected_text,context_text,source_url,source_title,source_kind,direction,video_time,created_at")
+        .eq("user_id", session.user.id).order("created_at", { ascending: true }).range(offset, offset + pageSize - 1);
+      if (error) return apiError("Không thể xuất ngữ cảnh đã lưu. Hãy kiểm tra migration 004_extension_capture.sql.", 500);
+      occurrences.push(...(data ?? []));
       if (!data || data.length < pageSize) break;
     }
   }
@@ -80,7 +104,9 @@ export async function GET(request: NextRequest) {
     flashcards.push(...(data ?? []));
     if (!data || data.length < pageSize) break;
   }
-  return new NextResponse(JSON.stringify({ version: 3, exported_at: new Date().toISOString(), vocabulary, translations, daily_sets: dailySets, flashcards }, null, 2), {
+  const json = JSON.stringify({ version: 4, exported_at: new Date().toISOString(), vocabulary, translations, daily_sets: dailySets, flashcards, identity_refs: identityRefs, occurrences }, null, 2);
+  if (new TextEncoder().encode(json).length > 20_000_000) return apiError("Bản JSON vượt giới hạn 20 MB. Cần xuất bản ZIP phân mảnh ở bước backup lớn.", 413);
+  return new NextResponse(json, {
     headers: {
       "Content-Type": "application/json; charset=utf-8",
       "Content-Disposition": `attachment; filename="${filename}.json"`,

@@ -309,7 +309,7 @@ Thiết kế và phân tích ảnh hưởng nằm trong [PLAN_EXTENSION.md](PLAN
 
 **Thực hiện**
 
-- [ ] Thêm JSON version 4, đầy đủ metadata/refs/occurrences và mapping ID cho flashcard/bộ học; giữ adapter v1–3 và CSV mẫu cũ.
+- [x] Thêm JSON version 4, đầy đủ metadata/refs/occurrences và mapping ID cho flashcard/bộ học; giữ adapter v1–3 và CSV mẫu cũ. (Code; cần kiểm thử round-trip trên DB.)
 - [ ] Tạo ZIP manifest và phần JSON có giới hạn cho backup lớn; import có checkpoint, giới hạn giải nén và ghi kết quả từng phần.
 - [ ] Diễn tập restore trên database trống và database đã có dữ liệu; định nghĩa rõ restore tiến độ từ file so với nhập bỏ qua mục đã có.
 - [ ] Quét lại mọi `onConflict` và writer dùng normalized meaning. Chỉ bỏ unique cũ khi không còn đường ghi phụ thuộc vào nó.

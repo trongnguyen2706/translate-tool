@@ -6,10 +6,14 @@ import { dailyFiltersSchema, directionSchema, vocabularySchema } from "@/lib/val
 import { parseCsv, vocabularyCsvColumns } from "@/lib/vocabulary-csv";
 
 export const dynamic = "force-dynamic";
+const maxJsonBytes = 20_000_000;
 
 const schema = z.object({
-  version: z.union([z.literal(1), z.literal(2), z.literal(3)]),
+  version: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]),
   vocabulary: z.array(vocabularySchema.extend({
+    details: z.record(z.string(), z.unknown()).optional(),
+    field_provenance: z.record(z.string(), z.unknown()).optional(),
+    revision: z.number().int().positive().optional(),
     id: z.uuid().optional(),
     created_at: z.string().datetime({ offset: true }).optional(),
     updated_at: z.string().datetime({ offset: true }).optional()
@@ -26,7 +30,19 @@ const schema = z.object({
     requested_count: z.number().int().min(1).max(30),
     items: z.array(z.object({ vocabulary_item_id: z.uuid(), studied: z.boolean() })).max(30)
   })).max(2000).optional(),
-  flashcards: z.array(z.object({ vocabulary_item_id: z.uuid(), status: z.enum(["not_yet", "roughly", "learned", "mastered"]).nullable(), source_daily_date: z.iso.date().nullable().optional() })).max(2000).optional()
+  flashcards: z.array(z.object({ vocabulary_item_id: z.uuid(), status: z.enum(["not_yet", "roughly", "learned", "mastered"]).nullable(), source_daily_date: z.iso.date().nullable().optional() })).max(2000).optional(),
+  identity_refs: z.array(z.object({
+    id: z.uuid().optional(), vocabulary_item_id: z.uuid(), provider: z.string().min(1).max(80),
+    source_reference: z.string().min(1).max(500), dataset_version: z.string().max(80).default(""),
+    created_at: z.string().datetime({ offset: true }).optional()
+  })).max(100000).optional(),
+  occurrences: z.array(z.object({
+    id: z.uuid().optional(), vocabulary_item_id: z.uuid(), operation_id: z.uuid(),
+    selected_text: z.string().min(1).max(120), context_text: z.string().max(2000).default(""),
+    source_url: z.string().url().max(2048), source_title: z.string().max(300).default(""),
+    source_kind: z.enum(["youtube", "web"]), direction: directionSchema,
+    video_time: z.number().finite().min(0).nullable(), created_at: z.string().datetime({ offset: true }).optional()
+  })).max(100000).optional()
 });
 
 const csvItemSchema = vocabularySchema.extend({
@@ -108,15 +124,23 @@ async function importCsv(request: NextRequest, session: NonNullable<Awaited<Retu
 export async function POST(request: NextRequest) {
   const session = await requireApiSession();
   if (!session) return apiError("Bạn cần đăng nhập.", 401);
-  if (Number(request.headers.get("content-length") ?? 0) > 2_000_000) return apiError("Tệp nhập quá lớn.", 413);
   if (request.nextUrl.searchParams.get("format") === "csv") return importCsv(request, session);
   let body: unknown;
-  try { body = await request.json(); } catch { return apiError("Tệp JSON không hợp lệ."); }
+  try {
+    const json = await request.text();
+    if (new TextEncoder().encode(json).length > maxJsonBytes) return apiError("Tệp JSON tối đa 20 MB.", 413);
+    body = JSON.parse(json);
+  } catch { return apiError("Tệp JSON không hợp lệ."); }
   const parsed = schema.safeParse(body);
   if (!parsed.success) return apiError("Tệp không đúng định dạng xuất của app.");
 
   const vocabulary = parsed.data.vocabulary.map((item) => ({
     ...vocabularySchema.parse(item),
+    ...(parsed.data.version >= 4 ? {
+      ...(item.details ? { details: item.details } : {}),
+      ...(item.field_provenance ? { field_provenance: item.field_provenance } : {}),
+      ...(item.revision ? { revision: item.revision } : {})
+    } : {}),
     tags: [...new Set([...(item.tags ?? []), "Đã nhập"])],
     ...(item.created_at ? { created_at: item.created_at } : {}),
     ...(item.updated_at ? { updated_at: item.updated_at } : {}),
@@ -135,7 +159,7 @@ export async function POST(request: NextRequest) {
     if (error) return apiError("Không thể nhập bản dịch.", 500);
   }
   let dailySetsImported = 0;
-  if (parsed.data.daily_sets?.length || parsed.data.flashcards?.length) {
+  if (parsed.data.daily_sets?.length || parsed.data.flashcards?.length || parsed.data.identity_refs?.length || parsed.data.occurrences?.length) {
     const oldKeyById = new Map(parsed.data.vocabulary.filter((item) => item.id).map((item) => [item.id!,
       `${normalizeText(item.term)}\u0000${item.source_language}\u0000${meaningKey(item.meaning_en, item.meaning_vi)}`]));
     const currentIdByKey = new Map<string, string>();
@@ -181,6 +205,41 @@ export async function POST(request: NextRequest) {
         if (error) return apiError("Không thể khôi phục flashcard. Hãy kiểm tra migration 003_flashcards_tags.sql.", 500);
       }
     }
+    const refs = (parsed.data.identity_refs ?? []).map((ref) => {
+      const vocabularyItemId = currentIdByKey.get(oldKeyById.get(ref.vocabulary_item_id) ?? "");
+      return vocabularyItemId ? {
+        user_id: session.user.id, vocabulary_item_id: vocabularyItemId,
+        provider: ref.provider, source_reference: ref.source_reference,
+        dataset_version: ref.dataset_version, ...(ref.created_at ? { created_at: ref.created_at } : {})
+      } : null;
+    });
+    if (refs.some((ref) => !ref)) return apiError("Liên kết từ điển tham chiếu mục từ không hợp lệ.");
+    for (let offset = 0; offset < refs.length; offset += 100) {
+      const { error } = await session.supabase.from("vocabulary_identity_refs")
+        .upsert(refs.slice(offset, offset + 100) as NonNullable<(typeof refs)[number]>[], {
+          onConflict: "user_id,provider,source_reference,dataset_version", ignoreDuplicates: true
+        });
+      if (error) return apiError("Không thể khôi phục liên kết từ điển.", 500);
+    }
+    const occurrences = (parsed.data.occurrences ?? []).map((occurrence) => {
+      const vocabularyItemId = currentIdByKey.get(oldKeyById.get(occurrence.vocabulary_item_id) ?? "");
+      return vocabularyItemId ? {
+        user_id: session.user.id,
+        vocabulary_item_id: vocabularyItemId, operation_id: occurrence.operation_id,
+        selected_text: occurrence.selected_text, context_text: occurrence.context_text,
+        source_url: occurrence.source_url, source_title: occurrence.source_title,
+        source_kind: occurrence.source_kind, direction: occurrence.direction,
+        video_time: occurrence.video_time, ...(occurrence.created_at ? { created_at: occurrence.created_at } : {})
+      } : null;
+    });
+    if (occurrences.some((occurrence) => !occurrence)) return apiError("Ngữ cảnh tham chiếu mục từ không hợp lệ.");
+    for (let offset = 0; offset < occurrences.length; offset += 100) {
+      const { error } = await session.supabase.from("vocabulary_occurrences")
+        .upsert(occurrences.slice(offset, offset + 100) as NonNullable<(typeof occurrences)[number]>[], {
+          onConflict: "user_id,operation_id", ignoreDuplicates: true
+        });
+      if (error) return apiError("Không thể khôi phục ngữ cảnh đã lưu.", 500);
+    }
   }
-  return NextResponse.json({ vocabulary: vocabulary.length, translations: translations.length, daily_sets: dailySetsImported, flashcards: parsed.data.flashcards?.length ?? 0 });
+  return NextResponse.json({ vocabulary: vocabulary.length, translations: translations.length, daily_sets: dailySetsImported, flashcards: parsed.data.flashcards?.length ?? 0, identity_refs: parsed.data.identity_refs?.length ?? 0, occurrences: parsed.data.occurrences?.length ?? 0 });
 }

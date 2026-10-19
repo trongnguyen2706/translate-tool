@@ -323,17 +323,18 @@ export function LibraryView() {
     if (actionsBusy) return;
     const file = event.target.files?.[0];
     if (!file) return;
-    if (file.size > 2_000_000) { setError(t("Tệp nhập tối đa 2 MB.", "The import file must be 2 MB or smaller.")); event.target.value = ""; return; }
+    const maxBytes = format === "json" ? 20_000_000 : 2_000_000;
+    if (file.size > maxBytes) { setError(format === "json" ? t("Tệp JSON tối đa 20 MB.", "JSON imports are limited to 20 MB.") : t("Tệp CSV tối đa 2 MB.", "CSV imports are limited to 2 MB.")); event.target.value = ""; return; }
     setPendingAction(`import:${format}`);
     setError("");
     try {
       const body = await file.text();
-      const result = await apiJson<{ vocabulary: number; translations: number; daily_sets?: number; flashcards?: number; skipped?: number }>(await fetch(format === "csv" ? "/api/import?format=csv" : "/api/import", {
+      const result = await apiJson<{ vocabulary: number; translations: number; daily_sets?: number; flashcards?: number; identity_refs?: number; occurrences?: number; skipped?: number }>(await fetch(format === "csv" ? "/api/import?format=csv" : "/api/import", {
         method: "POST", headers: { "Content-Type": format === "csv" ? "text/csv; charset=utf-8" : "application/json" }, body
       }));
       setNotice(format === "csv"
         ? t(`Đã thêm ${result.vocabulary} mục từ từ CSV${result.skipped ? `, bỏ qua ${result.skipped} mục trùng` : ""}.`, `Imported ${result.vocabulary} words from CSV${result.skipped ? `; skipped ${result.skipped} duplicates` : ""}.`)
-        : t(`Đã nhập ${result.vocabulary} mục từ, ${result.translations} bản dịch, ${result.daily_sets ?? 0} bộ học và ${result.flashcards ?? 0} flashcard.`, `Imported ${result.vocabulary} words, ${result.translations} translations, ${result.daily_sets ?? 0} daily sets and ${result.flashcards ?? 0} flashcards.`));
+        : t(`Đã nhập ${result.vocabulary} mục từ, ${result.translations} bản dịch, ${result.daily_sets ?? 0} bộ học, ${result.flashcards ?? 0} flashcard và ${result.occurrences ?? 0} ngữ cảnh.`, `Imported ${result.vocabulary} words, ${result.translations} translations, ${result.daily_sets ?? 0} daily sets, ${result.flashcards ?? 0} flashcards and ${result.occurrences ?? 0} saved contexts.`));
       await load();
       if (result.translations) window.dispatchEvent(new Event("translations-updated"));
     } catch (err) { setError(err instanceof Error ? err.message : "Không thể nhập dữ liệu."); }
