@@ -51,7 +51,8 @@ def candidate_term(value: Any) -> str | None:
 
 
 def read_jsonl(path: Path) -> Iterable[dict[str, Any]]:
-    with path.open("r", encoding="utf-8") as source:
+    opener = gzip.open if path.suffix == ".gz" else open
+    with opener(path, "rt", encoding="utf-8") as source:
         for line_number, line in enumerate(source, 1):
             if not line.strip():
                 continue
@@ -79,7 +80,7 @@ def senses_for(entry: dict[str, Any], gloss_language: str) -> list[dict[str, Any
                 if text and len(text) <= 500:
                     examples.append(text)
         output.append({
-            "id": str(sense.get("id") or f"{entry.get('word','')}-{index}"),
+            "id": str(sense.get("id") or f"{entry.get('word','')}:{entry.get('pos','')}:{index}"),
             "partOfSpeech": clean(entry.get("pos", "")) or None,
             "definitions": glosses[:6],
             "examples": examples,
@@ -119,35 +120,46 @@ def build_en_en(path: Path) -> dict[str, list[dict[str, Any]]]:
     return index
 
 
+def explicit_translation_pairs(entry: dict[str, Any]) -> Iterable[tuple[str, str]]:
+    term = candidate_term(entry.get("word"))
+    language = entry.get("lang_code")
+    if not term or language not in ("en", "vi"):
+        return
+    for translation in entry.get("translations", []):
+        if not isinstance(translation, dict):
+            continue
+        target_language = translation.get("lang_code", translation.get("code"))
+        translated = candidate_term(translation.get("word"))
+        if not translated:
+            continue
+        if language == "en" and target_language == "vi":
+            yield translated, term
+        elif language == "vi" and target_language == "en":
+            yield term, translated
+
+
+def reverse_sense(entry: dict[str, Any], vi_term: str, en_term: str) -> dict[str, Any]:
+    return {
+        "id": f"{key(en_term)}:translation:{key(vi_term)}",
+        "partOfSpeech": clean(entry.get("pos", "")) or None,
+        "definitions": [en_term], "examples": [], "glossLanguage": "en", "sourceTerm": en_term,
+    }
+
+
 def build_en_vi(path: Path) -> tuple[dict[str, list[dict[str, Any]]], dict[str, list[dict[str, Any]]]]:
     forward: dict[str, list[dict[str, Any]]] = {}
     reverse: dict[str, list[dict[str, Any]]] = {}
     for entry in read_jsonl(path):
-        if entry.get("lang_code") != "en":
-            continue
         term = candidate_term(entry.get("word"))
         if not term:
             continue
-        senses = senses_for(entry, "vi")
-        for sense in senses:
-            add_entry(forward, term, sense, ipa_for(entry))
+        if entry.get("lang_code") == "en":
+            for sense in senses_for(entry, "vi"):
+                add_entry(forward, term, sense, ipa_for(entry))
         # Only use explicit Wiktionary translation pairs. Do not infer a reverse
         # entry by turning an arbitrary Vietnamese definition into an English term.
-        for translation in entry.get("translations", []):
-            if not isinstance(translation, dict) or translation.get("code") != "vi":
-                continue
-            vi_term = candidate_term(translation.get("word"))
-            if not vi_term:
-                continue
-            reverse_sense = {
-                "id": f"{key(term)}:translation:{key(vi_term)}",
-                "partOfSpeech": clean(entry.get("pos", "")) or None,
-                "definitions": [term],
-                "examples": [],
-                "glossLanguage": "en",
-                "sourceTerm": term,
-            }
-            add_entry(reverse, vi_term, reverse_sense)
+        for vi_term, en_term in explicit_translation_pairs(entry):
+            add_entry(reverse, vi_term, reverse_sense(entry, vi_term, en_term))
     return forward, reverse
 
 
@@ -209,27 +221,17 @@ def build_staging_database(english_path: Path, vietnamese_path: Path, database_p
     database.commit()
 
     for entry in read_jsonl(vietnamese_path):
-        if entry.get("lang_code") != "en":
-            continue
         term = candidate_term(entry.get("word"))
         if not term:
             continue
-        for sense in senses_for(entry, "vi"):
-            ipa = ipa_for(entry)
-            if ipa:
-                sense["ipa"] = ipa
-            add("en-vi", term, sense)
-        for translation in entry.get("translations", []):
-            if not isinstance(translation, dict) or translation.get("code") != "vi":
-                continue
-            vi_term = candidate_term(translation.get("word"))
-            if not vi_term:
-                continue
-            add("vi-en", vi_term, {
-                "id": f"{key(term)}:translation:{key(vi_term)}",
-                "partOfSpeech": clean(entry.get("pos", "")) or None,
-                "definitions": [term], "examples": [], "glossLanguage": "en", "sourceTerm": term,
-            })
+        if entry.get("lang_code") == "en":
+            for sense in senses_for(entry, "vi"):
+                ipa = ipa_for(entry)
+                if ipa:
+                    sense["ipa"] = ipa
+                add("en-vi", term, sense)
+        for vi_term, en_term in explicit_translation_pairs(entry):
+            add("vi-en", vi_term, reverse_sense(entry, vi_term, en_term))
     database.commit()
     return database
 
@@ -250,6 +252,7 @@ def write_chunked_packages(database: sqlite3.Connection, out_dir: Path, chunk_si
         buffer_bytes = 0
         for term, senses in groups:
             parsed_senses = [json.loads(payload) for payload in senses]
+            parsed_senses.sort(key=lambda sense: sense.get("partOfSpeech") == "name")
             entry_bytes = len(json.dumps({"term": term, "senses": parsed_senses}, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) + 1
             if buffer and (len(buffer) >= chunk_size or buffer_bytes + entry_bytes > 2 * 1024 * 1024):
                 chunks.append(write_stream_chunk(out_dir, direction, chunk_number, buffer))
@@ -294,6 +297,7 @@ def main() -> int:
     parser.add_argument("--english", type=Path, required=True, help="Kaikki English Wiktionary JSONL")
     parser.add_argument("--vietnamese", type=Path, required=True, help="Kaikki Vietnamese Wiktionary JSONL")
     parser.add_argument("--out", type=Path, default=Path("artifacts/dictionaries"))
+    parser.add_argument("--english-source", default="Kaikki English Wiktionary", help="Attribution name for the English input edition")
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
     database_path = args.out / ".dictionary-build.sqlite"
@@ -301,6 +305,7 @@ def main() -> int:
         if database_path.exists(): database_path.unlink()
         database = build_staging_database(args.english, args.vietnamese, database_path)
         packs = write_chunked_packages(database, args.out)
+        packs[0]["sources"] = [args.english_source]
         database.close()
         database_path.unlink(missing_ok=True)
         Path(str(database_path) + "-wal").unlink(missing_ok=True)

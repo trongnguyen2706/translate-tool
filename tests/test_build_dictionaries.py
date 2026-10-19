@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import unittest
+import uuid
 from pathlib import Path
 
 
@@ -20,6 +21,8 @@ class DictionaryBuildTests(unittest.TestCase):
         self.assertEqual(en_vi["bank"][0]["definitions"], ["ngân hàng", "bờ sông"])
         self.assertEqual(vi_en["ngân hàng"][0]["definitions"], ["bank"])
         self.assertNotIn("bờ sông", vi_en)
+        self.assertEqual(vi_en["trở thành"][0]["sourceTerm"], "become")
+        self.assertEqual(vi_en["trở thành"][0]["definitions"], ["become"])
 
     def test_gzip_pack_and_manifest_are_deterministic_and_checksummed(self):
         index = {"go": [{"id": "1", "definitions": ["đi"]}]}
@@ -43,10 +46,21 @@ class DictionaryBuildTests(unittest.TestCase):
         try:
             self.assertEqual(database.execute("select count(*) from senses where direction='en-en'").fetchone()[0], 1)
             self.assertEqual(database.execute("select count(*) from senses where direction='en-vi'").fetchone()[0], 1)
-            self.assertEqual(database.execute("select count(*) from senses where direction='vi-en'").fetchone()[0], 1)
+            self.assertEqual(database.execute("select count(*) from senses where direction='vi-en'").fetchone()[0], 2)
             self.assertEqual(database.execute("select term from senses where direction='vi-en'").fetchone()[0], "ngân hàng")
         finally:
             database.close()
+
+    def test_reads_official_compressed_jsonl_without_expanding_raw_dump(self):
+        fixtures = Path(__file__).parent / "fixtures"
+        scratch = Path(__file__).parents[1] / "artifacts"
+        scratch.mkdir(exist_ok=True)
+        compressed = scratch / f"dictionary-fixture-{uuid.uuid4()}.jsonl.gz"
+        try:
+            compressed.write_bytes(builder.gzip.compress((fixtures / "dictionary-english.jsonl").read_bytes()))
+            self.assertEqual(builder.build_en_en(compressed)["bank"][0]["definitions"], ["financial institution"])
+        finally:
+            compressed.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

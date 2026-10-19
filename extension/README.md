@@ -34,3 +34,18 @@ Review upstream license and attribution requirements before distributing a pack.
 ## Current limits
 
 The repo contains the build pipeline and local extension source, but no full dictionary data. YouTube CC rendering, sign-in, database RPCs, and offline restart behavior still require the staged browser/database checks recorded in `IMPLEMENTATION_LOG.md` before a release claim.
+
+## Install dictionaries in local staging
+
+The dictionary files are data, separate from the extension. Do not enter a raw Kaikki JSONL URL as the manifest. For a smaller basic English-English pack use the Simple English edition; English-Vietnamese and Vietnamese-English use the Vietnamese edition and its explicit translation pairs. The builder accepts `.jsonl` and `.jsonl.gz` directly.
+
+Download the compressed **Simple English** and **Vietnamese** datasets linked on [Kaikki's raw download page](https://kaikki.org/dictionary/rawdata.html) into `artifacts/dictionary-sources/`, then run:
+
+```powershell
+python scripts/build_dictionaries.py --english artifacts/dictionary-sources/simple-extract.jsonl.gz --vietnamese artifacts/dictionary-sources/vi-extract.jsonl.gz --english-source "Kaikki Simple English Wiktionary (basic English definitions)" --out public/dictionaries
+npm run dev
+```
+
+In extension settings set **Dictionary manifest URL** to `http://localhost:3000/dictionaries/manifest.json` and save. Open the extension toolbar popup, select a mode, click **Tải từ điển cho chế độ này**, and wait for the installed-entry count. Repeat for the other modes. Keep the popup open until installation finishes. Once installed, lookup uses IndexedDB and does not need the local server. AI and cloud sync still need the web server.
+
+Generated source and dictionary data are ignored by Git. The local URL works only on this machine; for other users publish the generated manifest, chunks, and source attribution together on an HTTPS host such as the planned R2 domain.
