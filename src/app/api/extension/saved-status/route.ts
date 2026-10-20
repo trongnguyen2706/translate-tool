@@ -33,6 +33,6 @@ export async function POST(request: Request) {
   const refsById = new Map<string, typeof refs>();
   for (const ref of refs ?? []) refsById.set(ref.vocabulary_item_id, [...(refsById.get(ref.vocabulary_item_id) ?? []), ref]);
   return extensionResponse(request, { state: "saved", items: items.map((item) => ({
-    ...item, flashcard_status: statusById.get(item.id) ?? null, identity_refs: refsById.get(item.id) ?? []
+    ...item, has_flashcard: statusById.has(item.id), flashcard_status: statusById.get(item.id) ?? null, identity_refs: refsById.get(item.id) ?? []
   })) });
 }

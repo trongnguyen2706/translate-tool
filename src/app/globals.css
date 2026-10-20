@@ -495,3 +495,10 @@ html[data-theme="dark"] *::-webkit-scrollbar-thumb:hover{background:#a0e957;back
 .suggestion-ai-tags{margin:12px 0}
 .suggestion-ai-tags .learning-tags{margin-top:7px}
 @media(max-width:700px){.library-bulk-actions>label,.tagging-progress>div{width:100%}.library-bulk-actions>span{flex-basis:100%}}
+/* Enrichment controls share the library's existing form styles. */
+.enrichment-fields { display:flex; flex-wrap:wrap; gap:10px 18px; margin:14px 0; padding:12px 16px; border:1px solid var(--border, #dbe3ef); border-radius:10px; }
+.enrichment-fields label { display:flex; align-items:center; gap:6px; font-size:13px; }
+.enrichment-fields input { width:auto; min-height:0; }
+.enrichment-fields legend { padding:0 6px; font-size:13px; }
+.dictionary-choices { display:flex; flex-direction:column; gap:10px; max-height:55vh; overflow:auto; margin:16px 0; }
+.dictionary-choices button { display:block; text-align:left; white-space:normal; line-height:1.5; padding:12px; }

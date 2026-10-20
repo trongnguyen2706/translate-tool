@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { apiError, requireApiSession } from "@/lib/api";
 import { csvEscape, vocabularyCsvColumns } from "@/lib/vocabulary-csv";
+import { createBackupArchive } from "@/lib/backup-archive.mjs";
 
 export const dynamic = "force-dynamic";
 
@@ -88,6 +89,7 @@ export async function GET(request: NextRequest) {
   const filename = `phrasebook-${new Date().toISOString().slice(0, 10)}`;
   if (request.nextUrl.searchParams.get("format") === "csv") {
     const csv = [vocabularyCsvColumns.join(","), ...vocabulary.map((row) => vocabularyCsvColumns.map((key) => csvEscape(row[key])).join(","))].join("\r\n");
+    if (vocabulary.length > 2000 || new TextEncoder().encode(csv).length > 1_999_997) return apiError("CSV vượt giới hạn nhập lại (2.000 mục / 2 MB). Chọn Xuất ZIP đầy đủ.", 413);
     return new NextResponse("\uFEFF" + csv, { headers: {
       "Content-Type": "text/csv; charset=utf-8",
       "Content-Disposition": `attachment; filename="${filename}.csv"`,
@@ -104,7 +106,15 @@ export async function GET(request: NextRequest) {
     flashcards.push(...(data ?? []));
     if (!data || data.length < pageSize) break;
   }
-  const json = JSON.stringify({ version: 4, exported_at: new Date().toISOString(), vocabulary, translations, daily_sets: dailySets, flashcards, identity_refs: identityRefs, occurrences }, null, 2);
+  const backup = { version: 4, exported_at: new Date().toISOString(), vocabulary, translations, daily_sets: dailySets, flashcards, identity_refs: identityRefs, occurrences };
+  if (request.nextUrl.searchParams.get("format") === "zip") {
+    try {
+      const bytes = await createBackupArchive(backup);
+      return new NextResponse(bytes, { headers: { "Content-Type": "application/zip", "Content-Disposition": `attachment; filename="${filename}.zip"`, "Cache-Control": "no-store" } });
+    } catch { return apiError("Không thể tạo ZIP trong giới hạn backup hiện tại (200 MB sau giải nén).", 413); }
+  }
+  if ([vocabulary, translations, dailySets, flashcards].some((rows) => rows.length > 2000)) return apiError("Dữ liệu vượt 2.000 mục. Chọn Xuất ZIP để có các phần nhập lại được.", 413);
+  const json = JSON.stringify(backup, null, 2);
   if (new TextEncoder().encode(json).length > 20_000_000) return apiError("Bản JSON vượt giới hạn 20 MB. Cần xuất bản ZIP phân mảnh ở bước backup lớn.", 413);
   return new NextResponse(json, {
     headers: {

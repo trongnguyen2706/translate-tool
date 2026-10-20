@@ -8,3 +8,5 @@ button { min-height: 40px; padding: 0 14px; border: 1px solid #2563eb; border-ra
 .actions { display: flex; flex-wrap: wrap; gap: 10px; }
 .secondary { margin-top: 10px; border-color: #cbd5e1; background: white; color: #172554; }
 .hint, #status { color: #475569; font-size: 13px; }
+.toggle { display:flex; align-items:center; gap:10px; }
+.toggle input { width:18px; height:18px; margin:0; }

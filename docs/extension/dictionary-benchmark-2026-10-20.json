@@ -1,0 +1,45 @@
+{
+  "environment": "Chrome page IndexedDB; actual full packs; Chrome messaging mocked",
+  "rows": [
+    {
+      "mode": "en-vi",
+      "entries": 248073,
+      "compressedBytes": 8186784,
+      "installSeconds": 27.442,
+      "lookupMedianMs": 0.5,
+      "lookupP95Ms": 1
+    },
+    {
+      "mode": "vi-en",
+      "entries": 41411,
+      "compressedBytes": 2787723,
+      "installSeconds": 4.97920000000298,
+      "lookupMedianMs": 0.4000000059604645,
+      "lookupP95Ms": 0.7999999970197678
+    },
+    {
+      "mode": "en-en",
+      "entries": 1349433,
+      "compressedBytes": 114280909,
+      "installSeconds": 187.41789999999105,
+      "lookupMedianMs": 0.5,
+      "lookupP95Ms": 1.0999999940395355
+    }
+  ],
+  "storageBefore": {
+    "quota": 10737418240,
+    "usage": 0,
+    "usageDetails": {}
+  },
+  "storageAfter": {
+    "quota": 11216798036,
+    "usage": 479379796,
+    "usageDetails": {
+      "indexedDB": 479379796
+    }
+  },
+  "storageDelta": 479379796,
+  "heapBefore": 14224917,
+  "heapAfter": 43722287,
+  "measuredAt": "2026-10-20T03:05:00.993Z"
+}

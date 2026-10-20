@@ -1,8 +1,10 @@
 # Checklist triển khai Chrome extension và từ điển nội bộ
 
-Cập nhật ngày 19 tháng 10 năm 2026. Trạng thái: đang triển khai; chỉ đánh dấu hoàn thành khi có bằng chứng kiểm tra tương ứng.
+Cập nhật ngày 20 tháng 10 năm 2026. Trạng thái: đang triển khai; chỉ đánh dấu hoàn thành khi có bằng chứng kiểm tra tương ứng.
 
 Thiết kế và phân tích ảnh hưởng nằm trong [PLAN_EXTENSION.md](PLAN_EXTENSION.md). Checklist này quy định thứ tự làm, những gì phải kiểm tra và đầu ra của từng bước. Đọc cả hai trước khi triển khai. Các ô dưới đây là công việc tương lai, không phải kết quả đã đạt.
+
+**Điều chỉnh phạm vi 20/10:** user bỏ nghe phát âm và chỉ yêu cầu chuẩn bị gói/hướng dẫn phát hành khi chưa có domain/R2/Store. Code 0.2.0, kiểm thử SQL/storage/ZIP/UI và phép đo full dictionary đã được ghi theo từng bước trong IMPLEMENTATION_LOG.md; những ô nghiệm thu staging/Store vẫn để mở.
 
 ## Cách sử dụng checklist
 

@@ -5,6 +5,9 @@ import { ArrowDownUp, BookOpen, Download, ExternalLink, FileUp, Layers3, LoaderC
 import { usePreferences } from "@/components/preferences-provider";
 import { cefrLevels, ieltsSkills, relevanceLabels, relevanceLabelsEn, skillLabels, topicKeys, topicLabels, topicLabelsEn } from "@/lib/learning";
 import type { Suggestion } from "@/lib/validation";
+import { lookupExtensionDictionary, type DictionarySense } from "@/lib/extension-dictionary";
+import { readBackupArchive } from "@/lib/backup-archive.mjs";
+import { EnrichmentHistory } from "./enrichment-history";
 
 type Item = {
   id: string; term: string; kind: "word" | "phrase"; source_language: "en" | "vi";
@@ -173,11 +176,20 @@ export function LibraryView() {
   const stopTagsRef = useRef(false);
   const [enriching, setEnriching] = useState(false);
   const [enrichMode, setEnrichMode] = useState<"en-en" | "en-vi" | "vi-en">("en-vi");
+  const [enrichSource, setEnrichSource] = useState<"ai" | "dictionary">("dictionary");
+  const [enrichFields, setEnrichFields] = useState<EnrichField[]>(["definitions", "ipa", "examples", "synonyms", "antonyms", "collocations"]);
+  const [missingFilter, setMissingFilter] = useState("all");
+  const [dictionaryChoice, setDictionaryChoice] = useState<{ term: string; senses: DictionarySense[]; choose: (sense: DictionarySense | null) => void } | null>(null);
+  const choiceRef = useRef<((sense: DictionarySense | null) => void) | null>(null);
   const [enrichProgress, setEnrichProgress] = useState({ processed: 0, total: 0, updated: 0 });
   const [stoppingEnrich, setStoppingEnrich] = useState(false);
   const stopEnrichRef = useRef(false);
   const importRef = useRef<HTMLInputElement>(null);
   const csvImportRef = useRef<HTMLInputElement>(null);
+  const zipImportRef = useRef<HTMLInputElement>(null);
+  const stopImportRef = useRef(false);
+  const [importProgress, setImportProgress] = useState<{ done: number; total: number } | null>(null);
+  const actionsBusy = tagging || classifying || enriching || !!pendingAction;
 
   async function load() {
     try {
@@ -194,10 +206,25 @@ export function LibraryView() {
       .then(({ items: result }) => setItems(result))
       .catch((err) => setError(err instanceof Error ? err.message : "Không thể tải kho từ."))
       .finally(() => setLoading(false));
-    return () => { stopTagsRef.current = true; stopEnrichRef.current = true; };
+    return () => { stopTagsRef.current = true; stopEnrichRef.current = true; stopImportRef.current = true; choiceRef.current?.(null); };
   }, []);
 
+  useEffect(() => {
+    let active = true;
+    const refresh = () => {
+      if (document.visibilityState !== "visible" || actionsBusy || editingId) return;
+      void fetch("/api/vocabulary", { cache: "no-store" }).then((response) => apiJson<{ items: Item[] }>(response))
+        .then((result) => { if (active) setItems(result.items); }).catch(() => {});
+    };
+    const receive = (event: MessageEvent) => {
+      if (event.source === window && event.origin === location.origin && event.data?.channel === "phrasebook-dictionary-v1" && event.data.type === "synced") refresh();
+    };
+    window.addEventListener("focus", refresh); document.addEventListener("visibilitychange", refresh); window.addEventListener("message", receive);
+    return () => { active = false; window.removeEventListener("focus", refresh); document.removeEventListener("visibilitychange", refresh); window.removeEventListener("message", receive); };
+  }, [actionsBusy, editingId]);
+
   const visible = useMemo(() => items.filter((item) => {
+    if (missingFilter !== "all" && !(missingFilter === "any" ? missingFields(item, enrichMode).length : missingFields(item, enrichMode).includes(missingFilter as EnrichField))) return false;
     const q = query.trim().toLocaleLowerCase();
     if (q && ![item.term, item.meaning_vi, item.meaning_en, item.example, ...item.collocations].some((value) => value.toLocaleLowerCase().includes(q))) return false;
     const date = localDate(item.created_at);
@@ -210,12 +237,11 @@ export function LibraryView() {
     if (topicFilter !== "all" && !item.topics.includes(topicFilter as Suggestion["topics"][number])) return false;
     if (tagFilter === "__untagged__" ? (item.tags ?? []).length > 0 : tagFilter !== "all" && !(item.tags ?? []).includes(tagFilter)) return false;
     return true;
-  }).sort((a, b) => sort === "newest" ? b.created_at.localeCompare(a.created_at) : a.created_at.localeCompare(b.created_at)), [items, query, period, anchor, weekday, sort, levelFilter, ieltsFilter, topicFilter, tagFilter]);
+  }).sort((a, b) => sort === "newest" ? b.created_at.localeCompare(a.created_at) : a.created_at.localeCompare(b.created_at)), [items, query, period, anchor, weekday, sort, levelFilter, ieltsFilter, topicFilter, tagFilter, missingFilter, enrichMode]);
 
   const allTags = useMemo(() => [...new Set(items.flatMap((item) => item.tags ?? []))].sort((a, b) => a.localeCompare(b, "vi")), [items]);
   const untaggedCount = items.filter((item) => !(item.tags ?? []).length).length;
   const selectedVisible = visible.filter((item) => selectedIds.has(item.id));
-  const actionsBusy = tagging || classifying || enriching || !!pendingAction;
 
   function toggleSelection(id: string) {
     setSelectedIds((current) => {
@@ -261,7 +287,7 @@ export function LibraryView() {
       : selectedVisible.length
       ? selectedVisible.filter((item) => item.source_language === "en")
       : visible.filter((item) => item.source_language === "en");
-    const ids = candidates.filter((item) => missingFields(item, enrichMode).length).slice(0, 100).map((item) => item.id);
+    const ids = candidates.filter((item) => missingFields(item, enrichMode).some((field) => enrichFields.includes(field))).slice(0, 100).map((item) => item.id);
     if (!ids.length) return;
     stopEnrichRef.current = false;
     setEnriching(true); setStoppingEnrich(false); setError(""); setNotice("");
@@ -271,9 +297,23 @@ export function LibraryView() {
       for (let index = 0; index < ids.length && !stopEnrichRef.current; index++) {
         const item = items.find((entry) => entry.id === ids[index]);
         if (!item) continue;
+        let dictionary;
+        if (enrichSource === "dictionary") {
+          const pack = await lookupExtensionDictionary(item.term, enrichMode === "vi-en" ? "en-en" : enrichMode);
+          let sense: DictionarySense | null = pack.senses[0] ?? null;
+          if (pack.senses.length > 1) sense = await new Promise<DictionarySense | null>((resolve) => {
+            const choose = (value: DictionarySense | null) => { choiceRef.current = null; setDictionaryChoice(null); resolve(value); };
+            choiceRef.current = choose;
+            setDictionaryChoice({ term: item.term, senses: pack.senses, choose });
+          });
+          if (stopEnrichRef.current) break;
+          if (!sense) { setEnrichProgress({ processed: index + 1, total: ids.length, updated }); continue; }
+          dictionary = { id: sense.id, dataVersion: pack.dataVersion, definitions: (sense.definitions ?? []).slice(0, 6).map((text) => text.slice(0, 500)), ipa: sense.ipa ?? "",
+            examples: (sense.examples ?? []).slice(0, 3), synonyms: (sense.synonyms ?? []).slice(0, 12), antonyms: (sense.antonyms ?? []).slice(0, 12), collocations: (sense.collocations ?? []).slice(0, 6) };
+        }
         const response = await fetch("/api/vocabulary/enrich", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ id: item.id, mode: enrichMode, fields: missingFields(item, enrichMode) })
+          body: JSON.stringify({ id: item.id, mode: enrichMode, source: enrichSource, dictionary, fields: missingFields(item, enrichMode).filter((field) => enrichFields.includes(field)) })
         });
         const result = await response.json() as { item?: Partial<Item> & { id: string }; error?: string; state?: string };
         if (!response.ok) throw new Error(result.error || t("Không thể bổ sung mục từ.", "Could not enrich this word."));
@@ -395,15 +435,28 @@ export function LibraryView() {
     finally { setPendingAction(null); }
   }
 
-  async function importFile(event: ChangeEvent<HTMLInputElement>, format: "json" | "csv") {
+  async function importFile(event: ChangeEvent<HTMLInputElement>, format: "json" | "csv" | "zip") {
     if (actionsBusy) return;
     const file = event.target.files?.[0];
     if (!file) return;
-    const maxBytes = format === "json" ? 20_000_000 : 2_000_000;
+    const maxBytes = format === "zip" ? 100_000_000 : format === "json" ? 20_000_000 : 2_000_000;
     if (file.size > maxBytes) { setError(format === "json" ? t("Tệp JSON tối đa 20 MB.", "JSON imports are limited to 20 MB.") : t("Tệp CSV tối đa 2 MB.", "CSV imports are limited to 2 MB.")); event.target.value = ""; return; }
     setPendingAction(`import:${format}`);
     setError("");
     try {
+      if (format === "zip") {
+        stopImportRef.current = false;
+        const parts = await readBackupArchive(new Uint8Array(await file.arrayBuffer()));
+        setImportProgress({ done: 0, total: parts.length });
+        let done = 0;
+        for (const part of parts) {
+          if (stopImportRef.current) break;
+          await apiJson(await fetch(`/api/import?partId=${encodeURIComponent(part.id)}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: part.body }));
+          done++; setImportProgress({ done, total: parts.length });
+        }
+        setNotice(t(`Đã nhập ${done}/${parts.length} phần. Chọn lại cùng ZIP để tiếp tục; phần hoàn tất không nhập lại. Tiến độ học đã có được giữ nguyên.`, `Imported ${done}/${parts.length} parts. Select the same ZIP to resume; completed parts are reused. Existing study progress is preserved.`));
+        await load(); window.dispatchEvent(new Event("translations-updated")); return;
+      }
       const body = await file.text();
       const result = await apiJson<{ vocabulary: number; translations: number; daily_sets?: number; flashcards?: number; identity_refs?: number; occurrences?: number; skipped?: number }>(await fetch(format === "csv" ? "/api/import?format=csv" : "/api/import", {
         method: "POST", headers: { "Content-Type": format === "csv" ? "text/csv; charset=utf-8" : "application/json" }, body
@@ -413,11 +466,13 @@ export function LibraryView() {
         : t(`Đã nhập ${result.vocabulary} mục từ, ${result.translations} bản dịch, ${result.daily_sets ?? 0} bộ học, ${result.flashcards ?? 0} flashcard và ${result.occurrences ?? 0} ngữ cảnh.`, `Imported ${result.vocabulary} words, ${result.translations} translations, ${result.daily_sets ?? 0} daily sets, ${result.flashcards ?? 0} flashcards and ${result.occurrences ?? 0} saved contexts.`));
       await load();
       if (result.translations) window.dispatchEvent(new Event("translations-updated"));
-    } catch (err) { setError(err instanceof Error ? err.message : "Không thể nhập dữ liệu."); }
-    finally { event.target.value = ""; setPendingAction(null); }
+    } catch (err) { setError((err instanceof Error ? err.message : "Không thể nhập dữ liệu.") + (format === "zip" ? t(" Chọn lại cùng ZIP để tiếp tục từ phần đã hoàn tất.", " Select the same ZIP to resume completed parts.") : "")); }
+    finally { event.target.value = ""; setPendingAction(null); setImportProgress(null); }
   }
 
   return <main className="library-page"><div className="page-container">
+    {importProgress && <div className="tagging-progress" role="status"><span>{t("Nhập backup", "Import backup")}: {importProgress.done}/{importProgress.total}</span><progress value={importProgress.done} max={importProgress.total} /><button onClick={() => { stopImportRef.current = true; }}>{t("Dừng sau phần này", "Stop after this part")}</button></div>}
+    <EnrichmentHistory />
     <div className="page-heading"><div><span className="eyebrow">{t("Học theo ngữ cảnh", "Learn in context")}</span><h1>{t("Kho từ của bạn", "Your vocabulary")}</h1><p>{t(`${items.length} từ và cụm từ đã lưu`, `${items.length} saved words and phrases`)}</p></div><button className="primary-button" disabled={actionsBusy} onClick={() => startEdit()}><Plus size={18} /> {t("Thêm từ", "Add word")}</button></div>
 
     <div className="library-toolbar">
@@ -430,14 +485,15 @@ export function LibraryView() {
         <select aria-label={t("Lọc IELTS", "Filter by IELTS priority")} value={ieltsFilter} onChange={(event) => setIeltsFilter(event.target.value)}><option value="all">{t("Mọi mức IELTS", "Any IELTS priority")}</option><option value="unclassified">{t("Chưa rõ IELTS", "IELTS not classified")}</option>{Object.entries(relevance).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select>
         <select aria-label={t("Lọc lĩnh vực", "Filter by topic")} value={topicFilter} onChange={(event) => setTopicFilter(event.target.value)}><option value="all">{t("Mọi lĩnh vực", "Any topic")}</option>{topicKeys.map((topic) => <option key={topic} value={topic}>{topics[topic]}</option>)}</select>
         <select aria-label={t("Lọc tag", "Filter by tag")} value={tagFilter} onChange={(event) => setTagFilter(event.target.value)}><option value="all">{t("Mọi tag", "Any tag")}</option><option value="__untagged__">{t("Chưa có tag", "Without tags")}</option>{allTags.map((tag) => <option key={tag} value={tag}>{tag}</option>)}</select>
+        <select aria-label={t("Lọc nội dung thiếu", "Filter missing fields")} value={missingFilter} onChange={(event) => setMissingFilter(event.target.value)}><option value="all">{t("Mọi nội dung", "All content")}</option><option value="any">{t("Có ô trống", "Any missing field")}</option>{(["definitions", "ipa", "examples", "synonyms", "antonyms", "collocations"] as EnrichField[]).map((field) => <option key={field} value={field}>{t("Thiếu", "Missing")} {field}</option>)}</select>
         <button className="sort-button" onClick={() => setSort(sort === "newest" ? "oldest" : "newest")}><ArrowDownUp size={16} /> {sort === "newest" ? t("Mới nhất", "Newest") : t("Cũ nhất", "Oldest")}</button>
       </div>
       <div className="library-ai-actions">
         <button type="button" className="subtle-button" disabled={actionsBusy || !items.some((item) => item.source_language === "en" && (!item.cefr_level || !item.ielts_relevance))} onClick={() => classify(items.filter((item) => item.source_language === "en" && (!item.cefr_level || !item.ielts_relevance)).slice(0, 10).map((item) => item.id))}>{classifying && <LoaderCircle size={16} className="spin" />}{classifying ? t("Đang phân loại…", "Classifying…") : t("Phân loại 10 từ chưa có nhãn · 1 lượt AI", "Classify 10 unlabeled words · 1 AI request")}</button>
         <button type="button" className="subtle-button" disabled={loading || actionsBusy || !untaggedCount} onClick={tagAllUntagged}><Sparkles size={16} />{t(`Tự gắn tag AI · ${untaggedCount} từ chưa có tag`, `Auto-tag with AI · ${untaggedCount} untagged words`)}</button>
-        <label>{t("Nghĩa bổ sung", "Definition mode")} <select value={enrichMode} onChange={(event) => setEnrichMode(event.target.value as typeof enrichMode)} disabled={actionsBusy}><option value="en-en">Anh–Anh</option><option value="en-vi">Anh–Việt</option><option value="vi-en">Việt–Anh</option></select></label>
-        <small>{t("Nguồn: AI · từ điển nội bộ chưa có gói dùng trên web", "Source: AI · no web-ready internal dictionary pack yet")}</small>
-        <button type="button" className="subtle-button" disabled={loading || actionsBusy || !items.some((item) => item.source_language === "en" && missingFields(item, enrichMode).length)} onClick={() => { void enrichMissing(); }}><Sparkles size={16} />{enriching ? t("Đang bổ sung…", "Enriching…") : t(`Bổ sung ô trống bằng AI${selectedVisible.length ? ` (${selectedVisible.length} đã chọn)` : ""}`, `Fill missing fields with AI${selectedVisible.length ? ` (${selectedVisible.length} selected)` : ""}`)}</button>
+        <label>{t("Nghĩa bổ sung", "Definition mode")} <select value={enrichMode} onChange={(event) => setEnrichMode(event.target.value as typeof enrichMode)} disabled={actionsBusy}><option value="en-en">{t("Anh–Anh", "English → English")}</option><option value="en-vi">{t("Anh–Việt", "English → Vietnamese")}</option><option value="vi-en">{t("Việt–Anh", "Vietnamese → English")}</option></select></label>
+        <label>{t("Nguồn", "Source")} <select value={enrichSource} disabled={actionsBusy} onChange={(event) => setEnrichSource(event.target.value as typeof enrichSource)}><option value="dictionary">{t("Từ điển trong extension", "Extension dictionary")}</option><option value="ai">AI</option></select></label>
+        <button type="button" className="subtle-button" disabled={loading || actionsBusy || !enrichFields.length || !visible.some((item) => item.source_language === "en" && missingFields(item, enrichMode).some((field) => enrichFields.includes(field)))} onClick={() => { void enrichMissing(); }}><Sparkles size={16} />{enriching ? t("Đang bổ sung…", "Enriching…") : t(`Bổ sung ô trống${selectedVisible.length ? ` (${selectedVisible.length} đã chọn)` : ""}`, `Fill missing fields${selectedVisible.length ? ` (${selectedVisible.length} selected)` : ""}`)}</button>
         <small>{t("Áp dụng toàn kho · tối đa 10 từ/lượt AI · tự lưu tag.", "Entire library · up to 10 words per AI request · tags saved automatically.")}</small>
       </div>
       {tagging && <div className="tagging-progress">
@@ -450,7 +506,8 @@ export function LibraryView() {
         <progress value={enrichProgress.processed} max={enrichProgress.total || 1} aria-label={t("Tiến độ bổ sung", "Enrichment progress")} />
         <button type="button" className="subtle-button" disabled={stoppingEnrich} onClick={() => { stopEnrichRef.current = true; setStoppingEnrich(true); }}>{stoppingEnrich ? t("Đang dừng sau mục hiện tại…", "Stopping after current word…") : t("Dừng", "Stop")}</button>
       </div>}
-      <small>{t("Bổ sung Kho từ hiện gọi AI khi bấm; mỗi mục tính một lượt gợi ý. Nguồn từ điển nội bộ sẽ bật khi có gói dùng được trên web.", "Library enrichment calls AI only after you click and costs one suggestion request per word. Internal dictionary mode will be available when a web-ready pack exists.")}</small>
+      <fieldset disabled={actionsBusy} className="enrichment-fields"><legend>{t("Chỉ bổ sung các ô trống đã chọn", "Fill selected missing fields only")}</legend>{(["definitions", "ipa", "examples", "synonyms", "antonyms", "collocations"] as EnrichField[]).map((field) => <label key={field}><input type="checkbox" checked={enrichFields.includes(field)} onChange={(event) => setEnrichFields((current) => event.target.checked ? [...current, field] : current.filter((value) => value !== field))} /> {field}</label>)}</fieldset>
+      <small>{enrichSource === "dictionary" ? t("Dùng bộ đã tải trong extension. Chọn nghĩa khi có nhiều kết quả; không tự gọi AI nếu thiếu.", "Uses downloaded extension dictionaries. Choose a sense for ambiguous words; missing data never triggers AI.") : t("Chỉ gọi AI khi bấm; kết quả đã có được dùng lại. Tối đa 100 mục mỗi lượt chạy.", "AI runs only after you click; completed results are reused. Up to 100 words per run.")}</small>
     </div>
 
     {(error || notice) && <div role={error ? "alert" : "status"} className={`notice ${error ? "error" : "success"}`}>{error || notice}<button onClick={() => { setError(""); setNotice(""); }} aria-label={t("Đóng thông báo", "Dismiss message")}><X size={16} /></button></div>}
@@ -472,6 +529,7 @@ export function LibraryView() {
       {item.learning_reason && <p className="learning-reason">{item.learning_reason}</p>}
       {item.collocations.length > 0 && <div className="collocation-list">{item.collocations.map((collocation) => <span key={collocation}>{collocation}</span>)}</div>}
       <OccurrencesPanel itemId={item.id} />
+      {Object.keys(item.field_provenance ?? {}).length > 0 && <details className="source-details"><summary>{t("Nguồn dữ liệu từng trường", "Field sources")}</summary>{Object.entries(item.field_provenance).map(([field, value]) => { const provenance = value as { source?: string; updated_at?: string }; return <p key={field}>{field}: {provenance.source === "ai" ? "AI" : provenance.source === "dictionary" ? t("Từ điển", "Dictionary") : t("Nhập / chỉnh sửa", "Imported / edited")} {provenance.updated_at && <small>· {new Date(provenance.updated_at).toLocaleString()}</small>}</p>; })}</details>}
       {(item.details?.ipa || hasList(item.details?.synonyms) || hasList(item.details?.antonyms)) && <details className="source-details"><summary>{t("Thông tin từ", "Dictionary details")}</summary>
         {typeof item.details.ipa === "string" && item.details.ipa && <p>IPA: {item.details.ipa} {detailsSource(item, "ipa") && <small>· {detailsSource(item, "ipa")}</small>}</p>}
         {hasList(item.details.synonyms) && <p>{t("Đồng nghĩa", "Synonyms")}: {(item.details.synonyms as string[]).join(", ")} {detailsSource(item, "synonyms") && <small>· {detailsSource(item, "synonyms")}</small>}</p>}
@@ -479,10 +537,10 @@ export function LibraryView() {
       </details>}
       {item.note && <p className="note-line">{item.note}</p>}
       {item.source_text && <details className="source-details"><summary>{t("Xem câu nguồn", "View source sentence")}</summary><p>{item.source_text}</p></details>}
-      <div className="card-actions"><button disabled={actionsBusy} onClick={() => startEdit(item)}>{t("Chỉnh sửa", "Edit")}</button><button onClick={() => addFlashcard(item.id)} disabled={actionsBusy}>{pendingAction === `flashcard:${item.id}` ? <LoaderCircle size={14} className="spin" /> : <Layers3 size={14} />} Flashcard</button><button onClick={() => classify([item.id])} disabled={actionsBusy || item.source_language !== "en"}>{classifying ? <LoaderCircle size={14} className="spin" /> : null} {t("Gợi ý nhãn AI", "Suggest AI labels")}</button><button onClick={() => enrichMissing([item.id])} disabled={actionsBusy || item.source_language !== "en" || !missingFields(item, enrichMode).length}>{t("Bổ sung AI", "Enrich with AI")}</button><button onClick={() => remove(item.id)} className="danger" aria-label={t(`Xóa ${item.term}`, `Delete ${item.term}`)} disabled={actionsBusy}>{pendingAction === `delete:${item.id}` ? <LoaderCircle size={16} className="spin" /> : <Trash2 size={16} />}</button></div>
+      <div className="card-actions"><button disabled={actionsBusy} onClick={() => startEdit(item)}>{t("Chỉnh sửa", "Edit")}</button><button onClick={() => addFlashcard(item.id)} disabled={actionsBusy}>{pendingAction === `flashcard:${item.id}` ? <LoaderCircle size={14} className="spin" /> : <Layers3 size={14} />} Flashcard</button><button onClick={() => classify([item.id])} disabled={actionsBusy || item.source_language !== "en"}>{classifying ? <LoaderCircle size={14} className="spin" /> : null} {t("Gợi ý nhãn AI", "Suggest AI labels")}</button><button onClick={() => enrichMissing([item.id])} disabled={actionsBusy || item.source_language !== "en" || !missingFields(item, enrichMode).length}>{t("Bổ sung ô trống", "Fill missing fields")}</button><button onClick={() => remove(item.id)} className="danger" aria-label={t(`Xóa ${item.term}`, `Delete ${item.term}`)} disabled={actionsBusy}>{pendingAction === `delete:${item.id}` ? <LoaderCircle size={16} className="spin" /> : <Trash2 size={16} />}</button></div>
     </article>)}</div></section>)}
 
-    <div className="data-actions"><span>{t("Dữ liệu của bạn", "Your data")}</span><div><a className="subtle-button" href="/api/export?format=json"><Download size={16} /> {t("Xuất JSON", "Export JSON")}</a><a className="subtle-button" href="/api/export?format=csv"><Download size={16} /> {t("Xuất CSV", "Export CSV")}</a><a className="subtle-button" href="/api/export?format=csv&sample=1"><Download size={16} /> {t("CSV mẫu", "Sample CSV")}</a><input ref={importRef} type="file" accept="application/json,.json" hidden onChange={(event) => importFile(event, "json")} /><button className="subtle-button" onClick={() => importRef.current?.click()} disabled={actionsBusy}>{pendingAction === "import:json" ? <LoaderCircle size={16} className="spin" /> : <FileUp size={16} />}{pendingAction === "import:json" ? t("Đang nhập…", "Importing…") : t("Nhập JSON", "Import JSON")}</button><input ref={csvImportRef} type="file" accept="text/csv,.csv" hidden onChange={(event) => importFile(event, "csv")} /><button className="subtle-button" onClick={() => csvImportRef.current?.click()} disabled={actionsBusy}>{pendingAction === "import:csv" ? <LoaderCircle size={16} className="spin" /> : <FileUp size={16} />}{pendingAction === "import:csv" ? t("Đang nhập…", "Importing…") : t("Nhập CSV", "Import CSV")}</button></div></div>
+    <div className="data-actions"><div><a className="subtle-button" href="/api/export?format=zip"><Download size={16} /> {t("Xuất ZIP đầy đủ", "Export full ZIP")}</a><input ref={zipImportRef} type="file" accept="application/zip,.zip" hidden onChange={(event) => importFile(event, "zip")} /><button className="subtle-button" disabled={actionsBusy} onClick={() => zipImportRef.current?.click()}><FileUp size={16} />{t("Nhập / tiếp tục ZIP", "Import / resume ZIP")}</button></div><span>{t("Dữ liệu của bạn", "Your data")}</span><div><a className="subtle-button" href="/api/export?format=json"><Download size={16} /> {t("Xuất JSON", "Export JSON")}</a><a className="subtle-button" href="/api/export?format=csv"><Download size={16} /> {t("Xuất CSV", "Export CSV")}</a><a className="subtle-button" href="/api/export?format=csv&sample=1"><Download size={16} /> {t("CSV mẫu", "Sample CSV")}</a><input ref={importRef} type="file" accept="application/json,.json" hidden onChange={(event) => importFile(event, "json")} /><button className="subtle-button" onClick={() => importRef.current?.click()} disabled={actionsBusy}>{pendingAction === "import:json" ? <LoaderCircle size={16} className="spin" /> : <FileUp size={16} />}{pendingAction === "import:json" ? t("Đang nhập…", "Importing…") : t("Nhập JSON", "Import JSON")}</button><input ref={csvImportRef} type="file" accept="text/csv,.csv" hidden onChange={(event) => importFile(event, "csv")} /><button className="subtle-button" onClick={() => csvImportRef.current?.click()} disabled={actionsBusy}>{pendingAction === "import:csv" ? <LoaderCircle size={16} className="spin" /> : <FileUp size={16} />}{pendingAction === "import:csv" ? t("Đang nhập…", "Importing…") : t("Nhập CSV", "Import CSV")}</button></div></div>
     <p className="import-hint">{t("CSV chỉ nhập kho từ. Tải CSV mẫu để xem tên cột; nhiều collocation, kỹ năng, lĩnh vực và tag trong một ô cách nhau bằng dấu chấm phẩy (;). Từ nhập được gắn tag “Đã nhập”. Tệp tối đa 2 MB.", "CSV imports vocabulary only. Download the sample for column names; separate multiple values with semicolons (;). Imported words receive the Imported tag. Maximum file size: 2 MB.")}</p>
   </div>
 
@@ -492,5 +550,6 @@ export function LibraryView() {
     {error && <div className="notice error">{language === "en" ? "Could not save this word." : error}</div>}
     <div className="modal-actions"><button className="subtle-button" onClick={() => setEditingId(null)} disabled={saving}>{t("Hủy", "Cancel")}</button><button className="primary-button" onClick={save} disabled={saving}>{saving && <LoaderCircle size={16} className="spin" />}{saving ? t("Đang lưu…", "Saving…") : t("Lưu mục từ", "Save word")}</button></div>
   </div></div>}
+  {dictionaryChoice && <div className="modal-backdrop"><div className="word-modal" role="dialog" aria-modal="true" aria-labelledby="dictionary-choice-title"><h2 id="dictionary-choice-title">{t("Chọn nghĩa cho", "Choose a sense for")} {dictionaryChoice.term}</h2><p>{t("Chỉ dùng nghĩa bạn chọn để điền ô trống. Nội dung đã có được giữ nguyên.", "Only the selected sense fills missing fields. Existing content is preserved.")}</p><div className="dictionary-choices">{dictionaryChoice.senses.map((sense, index) => <button autoFocus={index === 0} key={`${sense.id}-${index}`} className="subtle-button" onClick={() => dictionaryChoice.choose(sense)}>{sense.partOfSpeech && <strong>{sense.partOfSpeech} · </strong>}{sense.definitions?.join("; ") || sense.sourceTerm || t("Chưa có nghĩa", "No definition")}</button>)}</div><div className="modal-actions"><button className="subtle-button" onClick={() => dictionaryChoice.choose(null)}>{t("Bỏ qua từ này", "Skip word")}</button><button className="subtle-button" onClick={() => { stopEnrichRef.current = true; dictionaryChoice.choose(null); }}>{t("Dừng", "Stop")}</button></div></div></div>}
   </main>;
 }

@@ -2,8 +2,12 @@
   "manifest_version": 3,
   "name": "Phrasebook — video and web dictionary",
   "description": "Look up words in downloaded dictionaries and save them with context to Phrasebook.",
-  "version": "0.1.0",
-  "permissions": ["storage", "identity", "alarms"],
+  "version": "0.2.0",
+  "permissions": [
+    "storage",
+    "identity",
+    "alarms"
+  ],
   "host_permissions": [
     "https://www.youtube.com/*",
     "https://*/*",
@@ -18,11 +22,28 @@
     "default_title": "Phrasebook",
     "default_popup": "src/popup.html"
   },
-  "content_scripts": [{
-    "matches": ["https://www.youtube.com/watch*", "https://*/*", "http://localhost:3000/*", "http://127.0.0.1:3000/*"],
-    "js": ["src/content.js"],
-    "css": ["src/content.css"],
-    "run_at": "document_idle"
-  }],
-  "options_page": "src/options.html"
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.youtube.com/watch*",
+        "https://*/*",
+        "http://localhost:3000/*",
+        "http://127.0.0.1:3000/*"
+      ],
+      "js": [
+        "src/content.js"
+      ],
+      "css": [
+        "src/content.css"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "options_page": "src/options.html",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  }
 }

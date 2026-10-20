@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { apiError, requireApiSession } from "@/lib/api";
-import { meaningKey, normalizeText } from "@/lib/normalize";
 import { vocabularySchema, vocabularyUpdateSchema } from "@/lib/validation";
 
 export const dynamic = "force-dynamic";
@@ -43,25 +42,9 @@ export async function POST(request: NextRequest) {
   try { body = await request.json(); } catch { return apiError("Dữ liệu không hợp lệ."); }
   const parsed = vocabularySchema.safeParse(body);
   if (!parsed.success) return apiError("Mục từ không hợp lệ.");
-  const item = parsed.data;
-  const payload = {
-    ...item,
-    user_id: session.user.id,
-    normalized_term: normalizeText(item.term),
-    normalized_meaning: meaningKey(item.meaning_en, item.meaning_vi)
-  };
-  const { data: existing, error: lookupError } = await session.supabase.from("vocabulary_items")
-    .select(fields).eq("user_id", session.user.id)
-    .eq("normalized_term", payload.normalized_term)
-    .eq("source_language", payload.source_language)
-    .eq("normalized_meaning", payload.normalized_meaning).maybeSingle();
-  if (lookupError) return apiError("Không thể kiểm tra từ đã lưu.", 500);
-  if (existing) return NextResponse.json({ item: existing, already_existed: true });
-  const { data, error } = await session.supabase.from("vocabulary_items")
-    .insert(payload)
-    .select(fields).single();
-  if (error) return apiError("Không thể lưu từ. Hãy kiểm tra dữ liệu rồi thử lại.", 500);
-  return NextResponse.json({ item: data, already_existed: false });
+  const { data, error } = await session.supabase.rpc("save_vocabulary_item", { p_item: parsed.data });
+  if (error) return apiError(error.code === "21000" ? "Có nhiều mục cùng nghĩa. Chọn và sửa mục trong kho trước khi lưu." : "Không thể lưu từ. Kiểm tra migration 007.", error.code === "21000" ? 409 : 500);
+  return NextResponse.json(data);
 }
 
 export async function PATCH(request: NextRequest) {
@@ -81,21 +64,26 @@ export async function PATCH(request: NextRequest) {
   const provenance = { ...((old.field_provenance ?? {}) as Record<string, unknown>) };
   for (const field of Object.keys(values)) provenance[field] = { source: "manual", updated_at: payload.updated_at };
   payload.field_provenance = provenance;
-  if (values.term) payload.normalized_term = normalizeText(values.term);
-  if (values.meaning_en !== undefined || values.meaning_vi !== undefined) {
-    payload.normalized_meaning = meaningKey(values.meaning_en ?? old.meaning_en, values.meaning_vi ?? old.meaning_vi);
-  }
-  const { data, error } = await session.supabase.from("vocabulary_items")
-    .update(payload).eq("id", id).eq("user_id", session.user.id).eq("revision", old.revision).select(fields).maybeSingle();
-  if (error) return apiError("Không thể sửa mục từ.", 500);
-  if (!data) return apiError("Mục từ vừa được cập nhật ở nơi khác. Tải lại trang rồi thử lại.", 409);
-  return NextResponse.json({ item: data });
+  const { data, error } = await session.supabase.rpc("save_vocabulary_item", {
+    p_item: payload, p_target_id: id, p_overwrite: true, p_expected_revision: old.revision
+  });
+  if (error) return apiError("Mục từ vừa được cập nhật hoặc không thể lưu. Tải lại rồi thử lại.", error.code === "40001" ? 409 : 500);
+  return NextResponse.json({ item: data.item });
 }
 
 export async function DELETE(request: NextRequest) {
   const session = await requireApiSession();
   if (!session) return apiError("Bạn cần đăng nhập.", 401);
   const id = request.nextUrl.searchParams.get("id");
+  const undoRevision = request.nextUrl.searchParams.get("undoRevision");
+  if (undoRevision !== null) {
+    const revision = Number(undoRevision);
+    if (!z.uuid().safeParse(id).success || !Number.isInteger(revision) || revision < 1) return apiError("Thao tác hoàn tác không hợp lệ.");
+    const { data, error } = await session.supabase.rpc("undo_vocabulary_save", { p_id: id, p_revision: revision });
+    if (error) return apiError("Không thể hoàn tác.", 500);
+    if (!data) return apiError("Từ đã được sửa, thêm ngữ cảnh hoặc đưa vào học. Hãy quản lý mục này trong Kho từ.", 409);
+    return NextResponse.json({ ok: true, deletedIds: [id] });
+  }
   let body: unknown;
   if (id !== null) body = { ids: [id] };
   else {
@@ -103,8 +91,7 @@ export async function DELETE(request: NextRequest) {
   }
   const parsed = z.object({ ids: z.array(z.uuid()).min(1).max(100) }).safeParse(body);
   if (!parsed.success) return apiError("Chọn từ 1 đến 100 ID hợp lệ mỗi lần xóa.");
-  const { data, error } = await session.supabase.from("vocabulary_items")
-    .delete().in("id", [...new Set(parsed.data.ids)]).eq("user_id", session.user.id).select("id");
+  const { data, error } = await session.supabase.rpc("delete_vocabulary_items", { p_ids: [...new Set(parsed.data.ids)] });
   if (error) return apiError("Không thể xóa mục từ.", 500);
-  return NextResponse.json({ ok: true, deletedIds: (data ?? []).map((item) => item.id) });
+  return NextResponse.json({ ok: true, deletedIds: data ?? [] });
 }

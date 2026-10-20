@@ -21,6 +21,8 @@ const senseSchema = z.object({
 
 const schema = z.object({
   operationId: z.uuid(), term: z.string().trim().min(1).max(120), queryTerm: z.string().trim().min(1).max(120),
+  existingItemId: z.uuid().optional(),
+  createdAt: z.string().datetime({ offset: true }).optional(),
   phrase: z.boolean(), mode: z.enum(["en-en", "en-vi", "vi-en"]), selectedSense: senseSchema,
   context: z.string().max(2000).default(""), pageUrl: z.url().max(2048), pageTitle: z.string().max(300).default(""),
   videoTime: z.number().finite().min(0).nullable().default(null)
@@ -29,6 +31,7 @@ const schema = z.object({
 export function OPTIONS(request: Request) { return extensionOptions(request); }
 
 export async function POST(request: Request) {
+  if (process.env.EXTENSION_CAPTURE_ENABLED === "false") return extensionResponse(request, { error: "Cloud saving is temporarily paused. Your local queue is preserved." }, 503);
   const session = await getAllowedBearerSession(request);
   if (!session) return extensionResponse(request, { error: "Authentication required" }, 401);
   let raw: unknown;
@@ -39,6 +42,7 @@ export async function POST(request: Request) {
   const sense = capture.selectedSense;
   const definition = sense?.definitions?.[0] ?? "";
   const item = {
+    ...(capture.existingItemId ? { confirmed_item_id: capture.existingItemId } : {}),
     term: capture.term,
     kind: capture.phrase ? "phrase" : "word",
     source_language: "en",
@@ -73,12 +77,12 @@ export async function POST(request: Request) {
   const { data, error } = await session.supabase.rpc("capture_extension_word", {
     p_operation_id: capture.operationId,
     p_payload_hash: payloadHash,
-    p_item: item,
+    p_item: { ...item, capture_created_at: capture.createdAt ?? null },
     p_occurrence: occurrence
   });
   if (error) {
-    const status = error.code === "23505" ? 409 : error.code === "42501" ? 403 : 500;
-    return extensionResponse(request, { error: status === 409 ? "Operation ID conflict" : status === 403 ? "Not allowed" : "Could not save capture" }, status);
+    const status = error.code === "23505" || error.code === "23514" ? 409 : error.code === "42501" ? 403 : 500;
+    return extensionResponse(request, { error: error.code === "23514" ? "This word was deleted after it was queued. Remove this old entry, or deliberately look up and save the word again." : status === 409 ? "Operation ID conflict" : status === 403 ? "Not allowed" : "Could not save capture" }, status);
   }
   return extensionResponse(request, data);
 }

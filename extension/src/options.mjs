@@ -4,12 +4,13 @@ const fields = ["appOrigin", "supabaseUrl", "supabaseAnonKey", "googleClientId",
 async function load() {
   const stored = await chrome.storage.local.get(fields);
   for (const field of fields) if (stored[field]) $(`#${field}`).value = stored[field];
+  $("#youtubeEnabled").checked = (await chrome.storage.local.get("youtubeEnabled")).youtubeEnabled !== false;
 }
 
 $("#settings").addEventListener("submit", async (event) => {
   event.preventDefault();
   const values = Object.fromEntries(fields.map((field) => [field, $(`#${field}`).value.trim()]));
-  await chrome.storage.local.set(values);
+  await chrome.storage.local.set({ ...values, youtubeEnabled: $("#youtubeEnabled").checked });
   $("#status").textContent = "Settings saved.";
 });
 

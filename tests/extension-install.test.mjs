@@ -3,21 +3,21 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { gzipSync } from "node:zlib";
-import { getPackage } from "../extension/src/storage.mjs";
+import { getPackage, listQueue, putQueueItem, readRecord, removeDictionary } from "../extension/src/storage.mjs";
 
 let receive;
 const local = {};
 globalThis.chrome = {
-  runtime: { onInstalled: { addListener() {} }, onMessage: { addListener(listener) { receive = listener; } } },
+  runtime: { getURL: (path) => `chrome-extension://test/${path}`, onInstalled: { addListener() {} }, onMessage: { addListener(listener) { receive = listener; } } },
   alarms: { onAlarm: { addListener() {} } },
-  storage: { local: { async set(values) { Object.assign(local, values); } } }
+  storage: { local: { async get() { return local; }, async set(values) { Object.assign(local, values); }, async remove(key) { delete local[key]; } } }
 };
 await import("../extension/src/background.mjs");
 
-function send(type, values) {
+function send(type, values, sender = {}) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("Worker did not respond")), 5000);
-    receive({ protocol: 1, type, ...values }, {}, (result) => { clearTimeout(timer); resolve(result); });
+    receive({ protocol: 1, type, ...values }, sender, (result) => { clearTimeout(timer); resolve(result); });
   });
 }
 
@@ -75,4 +75,61 @@ test("dictionary installs activate atomically, preserve the old version on failu
   current = repository("test-wrong-language", [[row("bank", "a financial institution", "en")]]);
   assert.equal((await install()).ok, false);
   assert.equal((await lookup()).data.result.senses[0].definitions[0], "ngân hàng thương mại");
+});
+
+test("offline words survive dictionary deletion and sync retries keep one operation and private cache per account", async (t) => {
+  Object.defineProperty(navigator, "onLine", { configurable: true, value: false });
+  local.account = { userId: "account-a", accessToken: "test-token", expiresAt: Date.now() + 3600000, appOrigin: "http://localhost:3000" };
+  const operationId = crypto.randomUUID();
+  const capture = { operationId, term: "bank", mode: "en-vi", selectedSense: { id: "bank", definitions: ["ngân hàng cá nhân"], ipa: "/bæŋk/" }, pageUrl: "https://example.com/", context: "at the bank" };
+  assert.equal((await send("save-capture", { capture })).ok, true);
+  assert.equal((await listQueue("account-a")).length, 1);
+  assert.equal((await send("lookup", { term: "bank", mode: "en-vi" })).data.result.senses[0].ipa, "/bæŋk/");
+  assert.equal((await send("get-config")).data.account.accessToken, undefined);
+  assert.equal((await send("management-status")).ok, false, "web content cannot read queue manager data");
+  await removeDictionary("en-vi");
+  assert.equal((await listQueue("account-a")).length, 1);
+  assert.equal((await send("lookup", { term: "bank", mode: "en-vi" })).data.source, "personal");
+  assert.equal((await send("lookup-dictionary", { term: "bank", mode: "en-vi" })).data.result, null, "web bridge never reads personal meanings");
+  local.account = { ...local.account, userId: "account-b" };
+  assert.equal((await send("lookup", { term: "bank", mode: "en-vi" })).data.result, null);
+  assert.equal((await send("management-status", {}, { url: "chrome-extension://test/src/manage.html" })).data.queue.length, 0);
+  local.account = { ...local.account, userId: "account-a" };
+  Object.defineProperty(navigator, "onLine", { configurable: true, value: true });
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async (_url, options) => {
+    calls++;
+    assert.equal(JSON.parse(options.body).operationId, operationId);
+    if (calls === 1) throw new Error("Lost response after server commit");
+    return Response.json({ item_id: "server-word", replayed: true });
+  });
+  await send("sync-queue");
+  assert.equal((await readRecord("queue", operationId)).state, "pending");
+  const failed = await readRecord("queue", operationId);
+  await putQueueItem({ ...failed, leaseUntil: 0 });
+  await Promise.all([send("sync-queue"), send("sync-queue")]);
+  const done = await readRecord("queue", operationId);
+  assert.equal(calls, 2, "concurrent sync calls share one worker run");
+  assert.equal(done.state, "synced");
+  assert.equal(done.serverResult.item_id, "server-word");
+  await putQueueItem({ ...done, state: "syncing", leaseUntil: Date.now() - 1000 });
+  await import("../extension/src/background.mjs?worker-restart");
+  await send("sync-queue");
+  assert.equal((await readRecord("queue", operationId)).state, "synced", "a restarted worker reclaims an expired syncing lease");
+});
+
+test("concurrent token refresh is shared and a late refresh cannot sign a logged-out account back in", async (t) => {
+  local.account = { userId: "refresh-user", accessToken: "old-test-token", refreshToken: "test-refresh", expiresAt: 0, appOrigin: "http://localhost:3000", supabaseUrl: "https://supabase.test" };
+  let release, calls = 0;
+  t.mock.method(globalThis, "fetch", async (url) => {
+    if (String(url).includes("grant_type=refresh_token")) { calls++; await new Promise((resolve) => { release = resolve; }); return Response.json({ access_token:"new-test-token", refresh_token:"new-test-refresh",expires_in:3600 }); }
+    return Response.json({ state:"not_saved",items:[] });
+  });
+  const first = send("read-status", {mode:"en-en",term:"hello"}), second = send("read-status", {mode:"en-en",term:"hello"});
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(calls, 1);
+  delete local.account; release();
+  assert.equal((await first).data.state, "needs_auth");
+  assert.equal((await second).data.state, "needs_auth");
+  assert.equal(local.account, undefined);
 });

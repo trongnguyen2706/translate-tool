@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Phrasebook — downloads and sync</title><link rel="stylesheet" href="manage.css"></head>
+<body><main>
+  <header><div><p class="eyebrow">Phrasebook</p><h1>Downloads and sync</h1></div><button id="refresh">Refresh</button></header>
+  <p id="status" role="status" aria-live="polite"></p>
+  <section aria-labelledby="dictionary-heading"><h2 id="dictionary-heading">Offline dictionaries</h2><p id="storage"></p><div id="packages"></div><p class="hint">Removing a dictionary keeps your saved words and sync queue. You can download it again from the extension popup.</p></section>
+  <section aria-labelledby="queue-heading"><div class="section-heading"><h2 id="queue-heading">Saved words</h2><button id="sync">Sync now</button></div><p id="summary"></p><div class="filters"><label>Show <select id="filter"><option value="waiting">Waiting or needs attention</option><option value="all">All entries</option><option value="synced">Synced</option></select></label></div><div id="queue"></div><button id="more" hidden>Show 50 more</button><p class="hint">Only entries for the signed-in account are shown. Retry keeps the original operation ID to prevent duplicate flashcards. Removing a local entry does not delete words already synced to your library. Uninstalling the extension deletes unsynced entries.</p></section>
+  <section aria-labelledby="ai-heading"><div class="section-heading"><h2 id="ai-heading">AI request history</h2><button id="load-ai">Load recent requests</button></div><div id="ai-requests"></div><p class="hint">Completed responses are reused. An unknown outcome is never retried automatically. Allowing another attempt can use another AI request.</p></section>
+</main><script type="module" src="manage.mjs"></script></body></html>

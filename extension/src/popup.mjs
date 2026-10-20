@@ -56,4 +56,5 @@ $("#flashcards").addEventListener("click", async () => {
   if (!result.ok) $("#message").textContent = result.error;
 });
 for (const id of ["#settings", "#open-settings"]) $(id).addEventListener("click", () => chrome.runtime.openOptionsPage());
+$("#manager").addEventListener("click", () => { void message("open-manager"); });
 void refresh();

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, ArrowRight, BookOpen, Lightbulb, LoaderCircle, RotateCcw, Trash2 } from "lucide-react";
 import { usePreferences } from "@/components/preferences-provider";
 import { flashcardStatusLabels, flashcardStatusLabelsEn, relevanceLabels, relevanceLabelsEn, topicLabels, topicLabelsEn } from "@/lib/learning";
@@ -15,6 +15,9 @@ type Card = {
 };
 const statuses: FlashcardStatus[] = ["not_yet", "roughly", "learned", "mastered"];
 type CardLanguageMode = "en-en" | "en-vi" | "vi-en";
+function matchesFilter(card: Card, filter: string) {
+  return filter === "all" || (filter === "unrated" && !card.status) || (filter === "daily" && !!card.source_daily_date) || card.status === filter;
+}
 
 async function readJson<T>(response: Response): Promise<T> {
   const data = await response.json();
@@ -39,6 +42,7 @@ export function FlashcardsView() {
   const [busy, setBusy] = useState(false);
   const [pendingStatus, setPendingStatus] = useState<FlashcardStatus | null>(null);
   const [error, setError] = useState("");
+  const reviewing = useRef<{ id?: string; filter: string }>({ filter: "all" });
 
   useEffect(() => {
     fetch("/api/flashcards", { cache: "no-store" }).then((response) => readJson<{ cards: Card[] }>(response))
@@ -47,9 +51,28 @@ export function FlashcardsView() {
       .finally(() => setLoading(false));
   }, []);
 
-  const visible = useMemo(() => cards.filter((card) => filter === "all" ||
-    (filter === "unrated" && !card.status) || (filter === "daily" && !!card.source_daily_date) || card.status === filter), [cards, filter]);
+  useEffect(() => {
+    let active = true;
+    const refresh = () => {
+      if (document.visibilityState !== "visible" || busy) return;
+      void fetch("/api/flashcards", { cache: "no-store" }).then((response) => readJson<{ cards: Card[] }>(response))
+        .then((data) => {
+          if (!active) return;
+          const nextIndex = data.cards.filter((entry) => matchesFilter(entry, reviewing.current.filter)).findIndex((entry) => entry.id === reviewing.current.id);
+          setCards(data.cards);
+          if (nextIndex >= 0) setIndex(nextIndex);
+        }).catch(() => {});
+    };
+    const receive = (event: MessageEvent) => {
+      if (event.source === window && event.origin === location.origin && event.data?.channel === "phrasebook-dictionary-v1" && event.data.type === "synced") refresh();
+    };
+    window.addEventListener("focus", refresh); document.addEventListener("visibilitychange", refresh); window.addEventListener("message", receive);
+    return () => { active = false; window.removeEventListener("focus", refresh); document.removeEventListener("visibilitychange", refresh); window.removeEventListener("message", receive); };
+  }, [busy]);
+
+  const visible = useMemo(() => cards.filter((card) => matchesFilter(card, filter)), [cards, filter]);
   const card = visible[Math.min(index, Math.max(visible.length - 1, 0))];
+  useEffect(() => { reviewing.current = { id: card?.id, filter }; }, [card?.id, filter]);
 
   function resetPractice() { setPracticeOpen(false); setShowHints(false); setSentence(""); }
   function chooseFilter(value: typeof filter) { setFilter(value); setIndex(0); setFlipped(false); resetPractice(); }
@@ -124,7 +147,7 @@ export function FlashcardsView() {
         <div className="flashcard-practice-heading"><div><strong>{t("Luyện đặt câu", "Sentence practice")}</strong><p>{t(`Viết một câu tiếng Anh có “${card.term}”.`, `Write an English sentence using “${card.term}”.`)}</p></div><button className="subtle-button" type="button" onClick={() => { setPracticeOpen(!practiceOpen); setShowHints(false); }}>{practiceOpen ? t("Thu gọn", "Close") : t("Bắt đầu", "Practice")}</button></div>
         {practiceOpen && <><textarea aria-label={t("Câu của bạn", "Your sentence")} value={sentence} onChange={(event) => setSentence(event.target.value)} rows={3} placeholder={t(`Thử đặt câu với “${card.term}”…`, `Try a sentence with “${card.term}”…`)} />
           <button className="flashcard-hint-toggle" type="button" onClick={() => setShowHints(!showHints)}><Lightbulb size={16} />{showHints ? t("Ẩn gợi ý", "Hide hints") : t("Cho tôi gợi ý", "Show me a hint")}</button>
-          {showHints && <div className="flashcard-hints"><p><strong>{t("Nghĩa", "Meaning")}:</strong> {card.meaning_vi || card.meaning_en || t("Chưa có nghĩa", "No meaning yet")}</p>{card.collocations.length > 0 && <p><strong>{t("Cụm từ có thể dùng", "Useful collocations")}:</strong> {card.collocations.join(" · ")}</p>}{card.example && <p><strong>{t("Câu tham khảo", "Example")}:</strong> {card.example}</p>}</div>}
+          {showHints && <div className="flashcard-hints"><p><strong>{t("Nghĩa", "Meaning")}:</strong> {(languageMode === "en-en" ? card.meaning_en : languageMode === "en-vi" ? card.meaning_vi : card.source_language === "en" ? card.term : card.meaning_en) || t("Chưa có nghĩa", "No meaning yet")}</p>{card.collocations.length > 0 && <p><strong>{t("Cụm từ có thể dùng", "Useful collocations")}:</strong> {card.collocations.join(" · ")}</p>}{card.example && <p><strong>{t("Câu tham khảo", "Example")}:</strong> {card.example}</p>}</div>}
         </>}
       </section>
       <div className="learning-tags flashcard-tags">{card.cefr_level && <span>{card.cefr_level}</span>}{card.ielts_relevance && <span>{relevance[card.ielts_relevance]}</span>}{card.topics.map((topic) => <span key={topic}>{topics[topic as keyof typeof topics] ?? topic}</span>)}{card.tags.map((tag) => <span key={tag}>#{tag}</span>)}</div>

@@ -5,6 +5,7 @@
   const PROTOCOL = 1;
   const isYouTube = location.hostname === "www.youtube.com";
   const videoContext = { video: null, pausedByUs: false, pausedAt: 0 };
+  const observedVideos = new WeakSet();
   const state = { config: {}, popup: null, activeWord: null, closeTimer: 0, sequence: 0, selection: null, selectionDirty: false, selectionAtPointerDown: "", lastSelectionSignature: "", ignoreClickUntil: 0, hoverWord: null, hoverFrame: 0, hoverPoint: null, pointer: null, pointerVersion: 0 };
   const host = document.createElement("div");
   host.id = "phrasebook-extension-root";
@@ -43,8 +44,15 @@
   `;
   shadow.append(rootStyle);
 
-  function send(type, values = {}) {
-    return chrome.runtime.sendMessage({ protocol: PROTOCOL, type, ...values });
+  async function send(type, values = {}) {
+    try {
+      const result = await chrome.runtime.sendMessage({ protocol: PROTOCOL, type, ...values });
+      if (!result || typeof result.ok !== "boolean") throw new Error("Phrasebook was updated. Reload this page and try again.");
+      return result;
+    } catch (error) {
+      if (/context invalidated|receiving end|message port closed/i.test(error.message ?? "")) throw new Error("Phrasebook was updated. Reload this page and try again.");
+      throw error;
+    }
   }
 
   function safeText(value) { return typeof value === "string" ? value : ""; }
@@ -92,6 +100,7 @@
   }
 
   function showLookupButton(rect, selectedText, context, caption = null) {
+    if (state.isApp) return;
     const existing = shadow.querySelector(".pbx-action");
     if (existing) existing.remove();
     const button = document.createElement("button");
@@ -213,6 +222,7 @@
   }
 
   function activateCaptions() {
+    if (state.config.youtubeEnabled === false) return;
     const segments = document.querySelectorAll(".ytp-caption-segment");
     for (const segment of segments) {
       if (segment.closest("#phrasebook-extension-root")) continue;
@@ -229,6 +239,11 @@
     const observer = new MutationObserver(activateCaptions);
     observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
     activateCaptions();
+    document.addEventListener("yt-navigate-start", () => {
+      videoContext.pausedByUs = false;
+      closePopup(); setHoverWord(null);
+      shadow.querySelector(".pbx-action")?.remove();
+    });
     document.addEventListener("click", onCaptionClick, true);
     document.addEventListener("pointerout", (event) => { if (!event.relatedTarget) setHoverWord(null); }, true);
     document.addEventListener("mousedown", (event) => {
@@ -298,6 +313,7 @@
   }
 
   function openFromWord(element, selected = null, rectOverride = null) {
+    if (state.config.youtubeEnabled === false) return;
     const video = document.querySelector("#movie_player video.html5-main-video") || document.querySelector("video");
     if (!video) return;
     const word = selected?.term ?? element.dataset.pbxWord;
@@ -308,9 +324,12 @@
       videoContext.video = video;
       videoContext.pausedByUs = !video.paused;
       videoContext.pausedAt = video.currentTime;
-      video.addEventListener("play", () => {
-        if (videoContext.video === video) videoContext.pausedByUs = false;
-      }, { once: true });
+      if (!observedVideos.has(video)) {
+        observedVideos.add(video);
+        const release = () => { if (videoContext.video === video) videoContext.pausedByUs = false; };
+        video.addEventListener("play", release);
+        video.addEventListener("seeking", release);
+      }
       if (!video.paused) video.pause();
     }
     void openPopup(word, rectOverride ?? element.getBoundingClientRect(), { term: word, context: sentence, pageUrl: location.href, pageTitle: document.title, videoTime: video.currentTime }, element);
@@ -416,6 +435,7 @@
         select.value = String(Math.max(0, senses.indexOf(sense)));
         select.addEventListener("change", () => {
           active.selectedSense = senses[Number(select.value)];
+          active.confirmedItemId = null;
           active.enrichmentStatus = "";
           active.enrichmentError = false;
           renderResult(lookup, { state: "checking", items: [] });
@@ -436,6 +456,15 @@
       if (missing.length) { const note = document.createElement("p"); note.className = "pbx-missing"; note.textContent = `Missing: ${missing.join(", ")}.`; content.append(note); }
       content.append(makeButton(active.enriching ? "AI is working…" : "Fill with AI", "pbx-btn", () => requestEnrichment(active, mode, sense), Boolean(active.enriching)));
     }
+    if (!savedItem && saved.items?.length) {
+      const label = document.createElement("label"); label.textContent = "Save this meaning as";
+      const existing = document.createElement("select"); existing.className = "pbx-sense"; existing.setAttribute("aria-label", "Link to an existing meaning");
+      const fresh = document.createElement("option"); fresh.value = ""; fresh.textContent = "A separate meaning"; existing.append(fresh);
+      for (const item of saved.items) { const option = document.createElement("option"); option.value = item.id; option.textContent = `${item.meaning_en || item.meaning_vi} · existing`; existing.append(option); }
+      existing.value = active.confirmedItemId ?? ""; existing.disabled = Boolean(active.enriching);
+      existing.onchange = () => { active.confirmedItemId = existing.value || null; };
+      label.append(existing); content.append(label);
+    }
     state.popup.append(content);
 
     const details = document.createElement("div"); details.className = "pbx-detail"; details.hidden = !active.expanded;
@@ -453,7 +482,7 @@
       renderResult(lookup, saved);
       place(active.rect, state.popup);
     }));
-    footer.append(makeButton(savedItem ? "Saved" : "Save", "pbx-btn pbx-primary", () => saveWord(active, mode, sense, status, footer), Boolean(savedItem) || Boolean(active.enriching)));
+    footer.append(makeButton(savedItem ? savedItem.has_flashcard === false ? "Add flashcard" : "Add context" : "Save", "pbx-btn pbx-primary", () => saveWord(active, mode, sense, status, footer), Boolean(active.enriching)));
     state.popup.append(footer);
     state.popup.dataset.expanded = active.expanded ? "true" : "false";
     place(active.rect, state.popup);
@@ -475,7 +504,7 @@
     const provider = mode === "en-en" ? "kaikki-en" : "kaikki-vi";
     if (sense?.id) {
       const byReference = items.find((item) => item.identity_refs?.some((ref) =>
-        ref.provider === provider && ref.source_reference === sense.id && ref.dataset_version === (state.activeWord?.dataVersion ?? "")));
+        ref.provider === provider && ref.source_reference === sense.id && ref.dataset_version === (sense.dataVersion ?? state.activeWord?.dataVersion ?? "")));
       if (byReference) return byReference;
     }
     const definition = safeText(sense?.definitions?.[0]).trim().toLocaleLowerCase("vi").replace(/\s+/g, " ");
@@ -537,7 +566,7 @@
       if (selectedIndex >= 0) senses[selectedIndex] = enrichedSense;
       else senses.push(enrichedSense);
       active.lookup = { ...active.lookup, result: { ...(active.lookup?.result ?? {}), senses } };
-      active.enrichmentStatus = added.length ? "Preview updated. Click Save to add it to your library." : "AI could not find reliable information for the missing fields.";
+      active.enrichmentStatus = added.length ? result.data.cacheHit ? "Previous AI result reused. Click Save to add it to your library." : "Preview updated. Click Save to add it to your library." : "AI could not find reliable information for the missing fields.";
     } catch (error) {
       active.enrichmentError = true;
       active.enrichmentStatus = error instanceof Error ? error.message : "AI enrichment failed. Please try again.";
@@ -559,8 +588,8 @@
     status.textContent = "Saving locally…";
     try {
       const result = await send("save-capture", { capture: {
-        operationId: crypto.randomUUID(), term: canonicalTerm, queryTerm: active.queryTerm, phrase: canonicalTerm.trim().split(/\s+/).length > 1,
-        mode, selectedSense: sense ? { ...sense, dataVersion: active.dataVersion } : null, context: active.capture.context, pageUrl: active.capture.pageUrl ?? location.href,
+        operationId: crypto.randomUUID(), existingItemId: active.confirmedItemId ?? undefined, term: canonicalTerm, queryTerm: active.queryTerm, phrase: canonicalTerm.trim().split(/\s+/).length > 1,
+        mode, selectedSense: sense ? { ...sense, dataVersion: sense.dataVersion ?? active.dataVersion } : null, context: active.capture.context, pageUrl: active.capture.pageUrl ?? location.href,
         pageTitle: active.capture.pageTitle ?? document.title, videoTime: active.capture.videoTime ?? null
       } });
       if (!result.ok) throw new Error(result.error || "Could not save this word.");
@@ -611,7 +640,11 @@
     document.removeEventListener("keydown", onEscape, true);
     document.removeEventListener("pointerdown", onOutside, true);
     const video = videoContext.video;
-    if (video && videoContext.pausedByUs && video.paused && Math.abs(video.currentTime - videoContext.pausedAt) < 0.75 && video.isConnected) void video.play().catch(() => {});
+    if (video && videoContext.pausedByUs && video.paused && Math.abs(video.currentTime - videoContext.pausedAt) < 0.75 && video.isConnected) void video.play().catch(() => {
+      if (!video.isConnected || !host.isConnected) return;
+      const resume = makeButton("Resume video", "pbx-action", () => { void video.play().then(() => resume.remove()).catch(() => { resume.textContent = "Use the player to resume"; }); });
+      resume.style.cssText = "left:16px;bottom:16px"; shadow.append(resume);
+    });
     videoContext.video = null; videoContext.pausedByUs = false;
   }
   function onEscape(event) { if (event.key === "Escape") { event.preventDefault(); closePopup(); } }
@@ -623,9 +656,24 @@
 
   void send("get-config").then((response) => {
     state.config = response.data ?? {};
+    if (state.config.youtubeEnabled === false) restoreCaptions();
     const appOrigin = state.config.appOrigin ?? "http://localhost:3000";
     if (appOrigin && new URL(appOrigin).origin === location.origin) {
+      state.isApp = true;
       host.remove();
+      // This bridge exposes only public dictionary data to the configured Phrasebook origin.
+      // Auth tokens, personal meanings and queue operations are never exposed to page messages.
+      let bridgeBusy = false;
+      window.addEventListener("message", async (event) => {
+        const input = event.data;
+        if (event.source !== window || event.origin !== location.origin || input?.channel !== "phrasebook-dictionary-v1" || input.type !== "lookup") return;
+        if (typeof input.id !== "string" || input.id.length > 80 || typeof input.term !== "string" || input.term.length > 120 || !["en-en", "en-vi", "vi-en"].includes(input.mode) || bridgeBusy) return;
+        bridgeBusy = true;
+        try {
+          const response = await send("lookup-dictionary", { term: input.term, mode: input.mode });
+          window.postMessage({ channel: "phrasebook-dictionary-v1", type: "result", id: input.id, response }, location.origin);
+        } finally { bridgeBusy = false; }
+      });
       return;
     }
     const target = mountPoint();
@@ -633,10 +681,20 @@
   }).catch(() => {});
 
   chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === "local" && changes.youtubeEnabled) {
+      state.config.youtubeEnabled = changes.youtubeEnabled.newValue !== false;
+      if (!state.config.youtubeEnabled) { closePopup(); restoreCaptions(); }
+      else if (isYouTube) activateCaptions();
+    }
+    if (area === "local" && changes.lastSyncAt && state.isApp) window.postMessage({ channel: "phrasebook-dictionary-v1", type: "synced" }, location.origin);
     if (area === "local" && changes.mode) {
       state.config.mode = changes.mode.newValue ?? "en-vi";
       closePopup();
       shadow.querySelector(".pbx-action")?.remove();
     }
   });
+  function restoreCaptions() {
+    setHoverWord(null);
+    for (const segment of document.querySelectorAll(".ytp-caption-segment:has(.pbx-word)")) segment.replaceChildren(document.createTextNode(segment.textContent));
+  }
 })();

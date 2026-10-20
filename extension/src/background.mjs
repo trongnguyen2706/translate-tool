@@ -1,15 +1,17 @@
 import { lookupFromIndex, normalizeLookupTerm, normalizeMode } from "./dictionary-core.mjs";
-import { getActivePackage, getPackage, getEntry, listQueue, openDatabase, putQueueItem, transaction } from "./storage.mjs";
+import { getActivePackage, getPackage, getEntry, listQueue, listPackages, openDatabase, putQueueItem, transaction, readRecord, rememberSense, removeDictionary } from "./storage.mjs";
 import { requestJson } from "./network.mjs";
 
 const APP_ORIGIN_DEFAULT = "http://localhost:3000";
 const MODES = { "en-en": "phrasebook-en-en", "en-vi": "phrasebook-en-vi", "vi-en": "phrasebook-vi-en" };
 const dictionaryInstalls = new Map();
+let syncing;
+let refreshing;
 chrome.runtime.onInstalled.addListener(() => {
   void openDatabase();
   chrome.alarms.create("phrasebook-sync", { periodInMinutes: 2 });
 });
-chrome.alarms.onAlarm.addListener((alarm) => { if (alarm.name === "phrasebook-sync") void syncQueue(); });
+chrome.alarms.onAlarm.addListener((alarm) => { if (alarm.name === "phrasebook-sync") void syncQueue().catch(() => {}); });
 
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (!message || message.protocol !== 1 || typeof message.type !== "string") return false;
@@ -21,12 +23,69 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
 });
 
 async function handleMessage(message, sender) {
+  if (["management-status", "retry-capture", "discard-capture", "remove-dictionary", "capture-candidates", "ai-history", "reset-ai-request"].includes(message.type)
+    && !sender.url?.startsWith(chrome.runtime.getURL(""))) throw new Error("Open the extension manager to use this action");
   switch (message.type) {
     case "lookup": return lookup(message.term, message.mode);
+    case "lookup-dictionary": return lookup(message.term, message.mode, false);
     case "save-capture": return saveCapture(message.capture, sender);
     case "read-status": return readStatus(message.mode, message.term);
     case "enrich": return enrich(message);
-    case "get-config": return chrome.storage.local.get(["mode", "appOrigin", "manifestUrl", "account"]);
+    case "get-config": {
+      const config = await chrome.storage.local.get(["mode", "appOrigin", "manifestUrl", "account", "youtubeEnabled"]);
+      return { ...config, account: config.account ? { userId: config.account.userId, email: config.account.email } : null };
+    }
+    case "management-status": {
+      const { account } = await chrome.storage.local.get("account");
+      const queue = account?.userId ? await listQueue(account.userId) : [];
+      return { packages: await listPackages(), storage: await navigator.storage?.estimate?.(),
+        queue: queue.map(({ operationId, term, state, attempts, lastError, createdAt, context, mode, pageUrl, videoTime }) => ({ operationId, term, state, attempts, lastError, createdAt, context, mode, pageUrl, videoTime })) };
+    }
+    case "retry-capture": {
+      const { account } = await chrome.storage.local.get("account");
+      const item = await readRecord("queue", message.operationId);
+      if (!account?.userId || item?.accountId !== account.userId) throw new Error("Saved word not found for this account");
+      if (item.state === "synced") return { state: "synced" };
+      if (item.state === "syncing" && item.leaseUntil > Date.now()) throw new Error("This word is syncing. Please wait.");
+      if (message.existingItemId) {
+        const candidates = await readStatus(item.mode, item.term);
+        if (!candidates.items?.some((candidate) => candidate.id === message.existingItemId)) throw new Error("Choose a word from this account's library");
+      }
+      await putQueueItem({ ...item, ...(message.existingItemId ? { existingItemId: message.existingItemId } : {}), state: "pending", leaseUntil: 0, lastError: "" });
+      return syncQueue();
+    }
+    case "capture-candidates": {
+      const { account } = await chrome.storage.local.get("account");
+      const item = await readRecord("queue", message.operationId);
+      if (!account?.userId || item?.accountId !== account.userId) throw new Error("Saved word not found for this account");
+      const status = await readStatus(item.mode, item.term);
+      return { items: status.items?.map(({ id, term, meaning_en, meaning_vi }) => ({ id, term, meaning_en, meaning_vi })) ?? [] };
+    }
+    case "discard-capture": {
+      const { account } = await chrome.storage.local.get("account");
+      const item = await readRecord("queue", message.operationId);
+      if (!account?.userId || item?.accountId !== account.userId) throw new Error("Saved word not found for this account");
+      if (item.state === "syncing" && item.leaseUntil > Date.now()) throw new Error("Wait for syncing to finish before removing this entry");
+      await transaction(["queue"], "readwrite", (tx) => tx.objectStore("queue").delete(item.operationId));
+      return { removed: true };
+    }
+    case "remove-dictionary": {
+      const mode = normalizeMode(message.mode);
+      if (dictionaryInstalls.has(mode)) throw new Error("Wait for this dictionary download to finish");
+      await removeDictionary(mode);
+      return { removed: true };
+    }
+    case "open-manager": return chrome.tabs.create({ url: chrome.runtime.getURL("src/manage.html") });
+    case "ai-history":
+    case "reset-ai-request": {
+      const account = await getAuthorizedAccount();
+      if (!account?.accessToken) throw new Error("Sign in to view AI requests");
+      return requestJson(`${validateAppOrigin(account.appOrigin)}/api/extension/enrich/requests`, {
+        method: message.type === "ai-history" ? "GET" : "POST",
+        headers: { Authorization: `Bearer ${account.accessToken}`, "Content-Type": "application/json" },
+        ...(message.type === "reset-ai-request" ? { body: JSON.stringify({ id: message.id, allowAnotherAttempt: true }) } : {})
+      });
+    }
     case "sign-in": return signIn(message.config);
     case "sign-out": return signOut();
     case "open-settings": return chrome.runtime.openOptionsPage();
@@ -46,13 +105,22 @@ async function handleMessage(message, sender) {
   }
 }
 
-async function lookup(term, requestedMode) {
+async function lookup(term, requestedMode, includePersonal = true) {
   const mode = normalizeMode(requestedMode);
-  const pack = await getActivePackage(mode);
-  if (!pack?.active) return { mode, result: null, missingPack: true };
   const normalized = normalizeLookupTerm(term);
+  const { account } = await chrome.storage.local.get("account");
+  const personal = includePersonal && account?.userId ? await readRecord("personal", [account.userId, mode, normalized]) : null;
+  const pack = await getActivePackage(mode);
+  if (!pack?.active) return { mode, result: personal ? { term: normalized, senses: personal.senses } : null, missingPack: !personal, source: personal ? "personal" : "dictionary" };
   const senses = await getEntry(pack.packageId, normalized);
-  if (senses) return { mode, result: lookupFromIndex({ [normalized]: senses }, normalized), source: "dictionary", dataVersion: pack.dataVersion };
+  if (senses || personal) {
+    const combined = [...(senses ?? [])];
+    for (const saved of personal?.senses ?? []) {
+      const index = combined.findIndex((sense) => saved.id ? sense.id === saved.id : JSON.stringify(sense.definitions) === JSON.stringify(saved.definitions));
+      if (index < 0) combined.push(saved); else combined[index] = { ...combined[index], ...saved };
+    }
+    return { mode, result: lookupFromIndex({ [normalized]: combined }, normalized), source: personal ? "personal+dictionary" : "dictionary", dataVersion: pack.dataVersion };
+  }
   return { mode, result: null, source: "dictionary", dataVersion: pack.dataVersion };
 }
 
@@ -62,6 +130,7 @@ async function readStatus(modeInput, term) {
   const mode = normalizeMode(modeInput);
   const origin = validateAppOrigin(account.appOrigin ?? APP_ORIGIN_DEFAULT);
   const response = await fetch(`${origin}/api/extension/saved-status`, {
+    signal: AbortSignal.timeout(15_000),
     method: "POST", headers: { "Authorization": `Bearer ${account.accessToken}`, "Content-Type": "application/json" },
     body: JSON.stringify({ term, mode })
   });
@@ -84,9 +153,15 @@ async function saveCapture(input, sender) {
   const account = (await chrome.storage.local.get("account")).account;
   if (!account?.userId) throw new Error("Sign in to Phrasebook before saving words");
   const operationId = input.operationId || crypto.randomUUID();
+  const previous = await readRecord("queue", operationId);
+  if (previous) {
+    if (previous.accountId !== account.userId) throw new Error("Operation belongs to a different account");
+    return { operationId, state: previous.state };
+  }
   const url = new URL(sender.tab?.url ?? input.pageUrl ?? "https://www.youtube.com/");
   if (!/^https?:$/.test(url.protocol)) throw new Error("Invalid source page");
   const capture = {
+    ...(input.existingItemId ? { existingItemId: input.existingItemId } : {}),
     operationId, accountId: account.userId,
     term: input.term.trim(), queryTerm: String(input.queryTerm ?? input.term).trim(), phrase: Boolean(input.phrase), mode: normalizeMode(input.mode),
     selectedSense: input.selectedSense ?? null,
@@ -96,7 +171,8 @@ async function saveCapture(input, sender) {
     createdAt: new Date().toISOString(), state: "pending", attempts: 0, leaseUntil: 0
   };
   await putQueueItem(capture);
-  void syncQueue();
+  if (capture.selectedSense) await rememberSense(account.userId, capture.mode, normalizeLookupTerm(capture.queryTerm), capture.selectedSense).catch(() => {});
+  void syncQueue().catch(() => {});
   return { operationId, state: "queued" };
 }
 
@@ -124,6 +200,7 @@ async function signIn(input) {
   if (!idToken) throw new Error("Google did not return an ID token");
 
   const response = await fetch(`${config.supabaseUrl}/auth/v1/token?grant_type=id_token`, {
+    signal: AbortSignal.timeout(15_000),
     method: "POST", headers: { "apikey": config.supabaseAnonKey, "Content-Type": "application/json" },
     body: JSON.stringify({ provider: "google", id_token: idToken, nonce })
   });
@@ -136,7 +213,7 @@ async function signIn(input) {
   };
   await chrome.storage.local.set({ account, authConfig: config });
   await resetAuthQueue(account.userId);
-  const verify = await fetch(`${config.appOrigin}/api/extension/session`, { headers: { Authorization: `Bearer ${account.accessToken}` } });
+  const verify = await fetch(`${config.appOrigin}/api/extension/session`, { signal: AbortSignal.timeout(15_000), headers: { Authorization: `Bearer ${account.accessToken}` } });
   if (!verify.ok) {
     await chrome.storage.local.remove("account");
     throw new Error(verify.status === 403 ? "This account does not have access to Phrasebook" : "Could not verify this account");
@@ -168,6 +245,13 @@ async function getAuthorizedAccount() {
   const { account } = await chrome.storage.local.get("account");
   if (!account?.accessToken) return null;
   if (account.expiresAt > Date.now() + 60_000) return account;
+  if (refreshing?.userId === account.userId) return refreshing.promise;
+  const promise = refreshAccount(account).finally(() => { if (refreshing?.promise === promise) refreshing = null; });
+  refreshing = { userId: account.userId, promise };
+  return promise;
+}
+
+async function refreshAccount(account) {
   if (!account.refreshToken) {
     await chrome.storage.local.remove("account");
     return null;
@@ -179,22 +263,30 @@ async function getAuthorizedAccount() {
   });
   const refreshed = await response.json();
   if (!response.ok || !refreshed.access_token) {
-    if (response.status === 400 || response.status === 401) await chrome.storage.local.remove("account");
+    if ((response.status === 400 || response.status === 401) && (await chrome.storage.local.get("account")).account?.refreshToken === account.refreshToken) await chrome.storage.local.remove("account");
     return null;
   }
   const next = { ...account, accessToken: refreshed.access_token, refreshToken: refreshed.refresh_token ?? account.refreshToken,
     expiresAt: Date.now() + (refreshed.expires_in ?? 3600) * 1000 };
+  const current = (await chrome.storage.local.get("account")).account;
+  if (current?.userId !== account.userId || current?.refreshToken !== account.refreshToken) return null;
   await chrome.storage.local.set({ account: next });
   return next;
 }
 
-async function syncQueue() {
+function syncQueue() {
+  if (!syncing) syncing = runSyncQueue().finally(() => { syncing = null; });
+  return syncing;
+}
+
+async function runSyncQueue() {
   if (!navigator.onLine) return { synced: 0, state: "offline" };
   const account = await getAuthorizedAccount();
   if (!account?.userId || !account?.accessToken) return { synced: 0, state: "needs_auth" };
   const pending = await listQueue(account.userId);
   let synced = 0;
   for (const item of pending) {
+    if ((await chrome.storage.local.get("account")).account?.userId !== account.userId) break;
     if (item.state === "synced" || item.state === "needs_resolution" || (item.leaseUntil ?? 0) > Date.now()) continue;
     if (item.state !== "pending" && item.state !== "syncing") continue;
     const claimed = { ...item, state: "syncing", leaseUntil: Date.now() + 60_000 };
@@ -202,6 +294,7 @@ async function syncQueue() {
     try {
       const origin = validateAppOrigin(account.appOrigin ?? APP_ORIGIN_DEFAULT);
       const response = await fetch(`${origin}/api/extension/capture`, {
+        signal: AbortSignal.timeout(30_000),
         method: "POST", headers: { "Authorization": `Bearer ${account.accessToken}`, "Content-Type": "application/json" },
         body: JSON.stringify(claimed)
       });
@@ -209,12 +302,15 @@ async function syncQueue() {
         await putQueueItem({ ...claimed, state: "needs_auth", leaseUntil: 0 });
         break;
       }
-      if (response.status === 409 || (response.status >= 400 && response.status < 500)) {
-        await putQueueItem({ ...claimed, state: "needs_resolution", lastError: `HTTP ${response.status}`, leaseUntil: 0 });
+      if (response.status === 409 || (response.status >= 400 && response.status < 500 && response.status !== 429)) {
+        const detail = await response.json().catch(() => ({}));
+        await putQueueItem({ ...claimed, state: "needs_resolution", lastError: String(detail.error ?? `HTTP ${response.status}`).slice(0, 300), leaseUntil: 0 });
         continue;
       }
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      await putQueueItem({ ...claimed, state: "synced", syncedAt: new Date().toISOString(), leaseUntil: 0 });
+      const result = await response.json();
+      await putQueueItem({ ...claimed, state: "synced", serverResult: result, syncedAt: new Date().toISOString(), leaseUntil: 0 });
+      await chrome.storage.local.set({ lastSyncAt: Date.now() });
       synced += 1;
     } catch (error) {
       const attempts = (claimed.attempts ?? 0) + 1;
@@ -267,7 +363,11 @@ async function installDictionary(manifestUrl, modeInput) {
   }
   let completedChunks = existing?.fingerprint === fingerprint && Number.isInteger(existing.completedChunks) && existing.completedChunks >= 0 && existing.completedChunks <= chunks.length ? existing.completedChunks : 0;
   let installedEntries = chunks.slice(0, completedChunks).reduce((total, chunk) => total + chunk.entryCount, 0);
-  const checkpoint = () => ({ packageId, direction: mode, dataVersion: pack.dataVersion, fingerprint, state: "installing", active: false, completedChunks, installedEntries, installedAt: new Date().toISOString() });
+  const storage = await navigator.storage?.estimate?.();
+  const estimatedBytes = chunks.slice(completedChunks).reduce((sum, chunk) => sum + chunk.uncompressedBytes, 0) * 2;
+  if (storage?.quota && storage.quota - (storage.usage ?? 0) < estimatedBytes) throw new Error("Not enough storage for this dictionary and its indexes. Remove an unused dictionary in Downloads and sync, then retry.");
+
+  const checkpoint = () => ({ packageId, direction: mode, dataVersion: pack.dataVersion, entryCount: pack.entryCount, fingerprint, state: "installing", active: false, completedChunks, installedEntries, installedAt: new Date().toISOString(), sources: pack.sources, license: pack.license, attributionUrl: manifest.attributionUrl ? new URL(manifest.attributionUrl, url).href : "" });
   const report = (state, error = "") => chrome.storage.local.set({ dictionaryProgress: { mode, state, completedChunks, totalChunks: chunks.length, installedEntries, totalEntries: pack.entryCount, error } });
   await transaction(["packages"], "readwrite", (tx) => tx.objectStore("packages").put(checkpoint()));
   await report("installing");
@@ -380,7 +480,7 @@ async function writeEntries(entries) {
 
 function validateHttpsUrl(value) {
   const url = new URL(value);
-  if (url.protocol !== "https:" && url.hostname !== "localhost") throw new Error("The manifest requires an HTTPS URL");
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && ["localhost", "127.0.0.1"].includes(url.hostname))) throw new Error("The manifest requires an HTTPS URL");
   return url.href;
 }
 

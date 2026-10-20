@@ -22,7 +22,7 @@ export async function POST(request: NextRequest) {
   if (!parsed.success) return apiError("Chọn từ 1 đến 10 mục để phân loại.");
   const ids = [...new Set(parsed.data.ids)];
   const { data: sourceItems, error: lookupError } = await session.supabase.from("vocabulary_items")
-    .select("id,term,kind,source_language,meaning_vi,meaning_en,example,source_text")
+    .select("id,term,kind,source_language,meaning_vi,meaning_en,example,source_text,revision")
     .eq("user_id", session.user.id).in("id", ids);
   if (lookupError) return apiError("Không thể tải các mục từ.", 500);
   if (!sourceItems || sourceItems.length !== ids.length) return apiError("Có mục từ không tồn tại.", 404);
@@ -54,14 +54,15 @@ export async function POST(request: NextRequest) {
       .filter((item) => validIds.has(item.id));
     let updated = 0;
     for (const item of classified) {
-      const { error } = await session.supabase.from("vocabulary_items")
+      const original = sourceItems.find((entry) => entry.id === item.id)!;
+      const { data: saved, error } = await session.supabase.from("vocabulary_items")
         .update({
           cefr_level: item.cefr_level, ielts_relevance: item.ielts_relevance,
           ielts_skills: item.ielts_skills, topics: item.topics,
-          learning_reason: item.learning_reason, updated_at: new Date().toISOString()
-        }).eq("id", item.id).eq("user_id", session.user.id);
+          learning_reason: item.learning_reason, revision: original.revision + 1, updated_at: new Date().toISOString()
+        }).eq("id", item.id).eq("user_id", session.user.id).eq("revision", original.revision).select("id").maybeSingle();
       if (error) return apiError(`Đã phân loại ${updated}/${ids.length} mục. Hãy kiểm tra migration 002_learning.sql.`, 500);
-      updated++;
+      if (saved) updated++;
     }
     return NextResponse.json({ updated, requested: ids.length, usage: summarizeCost(response.model, response.usage) });
   } catch {

@@ -30,6 +30,7 @@
 <script>
   const calls = [];
   let lookupDelay = 0, statusDelay = 0, saveDelay = 0;
+  let statusItems = [], storageListener;
   const playback = { paused:false, resumes:0 };
   const video = document.querySelector('video');
   Object.defineProperties(video, {
@@ -44,11 +45,11 @@
       const delay = request.type === 'lookup' ? lookupDelay : request.type === 'read-status' ? statusDelay : request.type === 'save-capture' ? saveDelay : 0;
       if (delay) await new Promise(resolve => setTimeout(resolve, delay));
       if (request.type === 'get-config') return { ok:true, data:{ mode:'en-vi', appOrigin:'https://phrasebook.invalid' } };
-      if (request.type === 'read-status') return { ok:true, data:{ state:'unknown', items:[] } };
+      if (request.type === 'read-status') return { ok:true, data:{ state:'unknown', items:statusItems } };
       if (request.type === 'save-capture') return { ok:true, data:{ queued:true } };
       if (request.type === 'enrich') return { ok:true, data:{ mode:request.mode, definitionLanguage:'vi', fields:{ examples:['This is a fixture example.'], ipa:'/test/' } } };
-      if (request.type === 'lookup' && request.term === 'eco-friendly') return { ok:true, data:{ mode:request.mode, result:{ senses:[
-        { id:'eco-friendly:adj:0', partOfSpeech:'adj', definitions:['thân thiện với môi trường'] }
+      if (request.type === 'lookup' && request.term === 'eco-friendly') return { ok:true, data:{ mode:request.mode, dataVersion:'new-pack', result:{ senses:[
+        { id:'eco-friendly:adj:0', dataVersion:'saved-original-pack', partOfSpeech:'adj', definitions:['thân thiện với môi trường'] }
       ] } } };
       if (request.type === 'lookup') return { ok:true, data:{ mode:request.mode, result:{ senses:[
         { id:'one', partOfSpeech:'adv', definitions:['một cách cụ thể; đặc biệt'], ipa:'/spəˈsɪfɪkli/' },
@@ -56,7 +57,7 @@
       ] } } };
       return { ok:false, error:'Fixture does not implement this operation' };
     } },
-    storage: { onChanged: { addListener() {} } },
+    storage: { onChanged: { addListener(listener) { storageListener = listener; } } },
   };
 </script>
 <script src="/content.js"></script>
@@ -176,6 +177,7 @@
       shadow.querySelector('.pbx-primary').click(); await tick();
       const capture = calls.filter(call => call.type === 'save-capture').at(-1)?.capture;
       check(capture?.term === 'eco-friendly' && capture.queryTerm === 'eco‑friendly' && capture.context === tokenSample, 'Saving keeps a canonical compound and its original query/context');
+      check(capture?.selectedSense?.dataVersion === 'saved-original-pack', 'Saving a personal cached sense keeps its original version after the active pack changes');
       check(!calls.some(call => call.type === 'enrich'), 'Hover and compound lookup never invoke AI');
       escape(); segment.textContent = original; await tick();
       // Regression from the user's recording: look up text under the player,
@@ -225,6 +227,25 @@
       // A continuing stream of movement outside must not perpetually restart the close timer.
       for (let i=0;i<8;i++) { fire(document.body, 'pointermove', { clientX:innerWidth-2, clientY:2 }); await new Promise(resolve => setTimeout(resolve, 50)); }
       check(!shadow.querySelector('.pbx-card'), 'The popup closes after actually leaving both the word and popup');
+      statusItems = [{id:'existing-one',term:'specifically',meaning_vi:'một cách cụ thể; đặc biệt',meaning_en:'',has_flashcard:true}];
+      fire(word(),'click'); await tick();
+      check(shadow.querySelector('.pbx-primary').textContent === 'Add context' && !shadow.querySelector('.pbx-primary').disabled,'A saved meaning can add a new context without resetting its flashcard');
+      escape(); statusItems[0].has_flashcard = false; fire(word(),'click'); await tick();
+      check(shadow.querySelector('.pbx-primary').textContent === 'Add flashcard','A saved word without a flashcard offers to create one');
+      escape(); statusItems = [{...statusItems[0],meaning_vi:'nghĩa khác'}]; fire(word(),'click'); await tick();
+      const link = shadow.querySelector('[aria-label="Link to an existing meaning"]');
+      check(link && link.value === '', 'An unmatched dictionary sense defaults to a separate meaning');
+      link.value = 'existing-one'; link.dispatchEvent(new Event('change')); shadow.querySelector('.pbx-primary').click(); await tick();
+      check(calls.filter(call=>call.type==='save-capture').at(-1).capture.existingItemId === 'existing-one', 'Explicitly linking an existing meaning sends the selected ID');
+      escape(); statusItems = [];
+      fire(word(),'click'); await tick(); const beforeNavigation = playback.resumes;
+      document.dispatchEvent(new Event('yt-navigate-start')); await tick();
+      check(!shadow.querySelector('.pbx-card') && playback.resumes === beforeNavigation,'SPA navigation closes stale lookup without resuming a different video');
+      const captionBeforeDisable = segment.textContent;
+      storageListener({youtubeEnabled:{newValue:false}},'local'); await tick();
+      check(!segment.querySelector('.pbx-word') && segment.textContent === captionBeforeDisable,'Disabling YouTube interactions restores the exact original caption');
+      storageListener({youtubeEnabled:{newValue:true}},'local'); await tick();
+      check(segment.querySelector('.pbx-word'),'Re-enabling YouTube interactions restores clickable words');
       window.getSelection().removeAllRanges();
       if (!document.fullscreenElement) {
         // Exercise the lifecycle handler even when browser automation lacks a

@@ -8,7 +8,7 @@ import { cefrLevels, ieltsSkills, relevanceLabels, relevanceLabelsEn, skillLabel
 import { usePreferences } from "@/components/preferences-provider";
 
 type Translation = { id: string; source_text: string; translated_text: string; direction: Direction; created_at: string };
-type Draft = Suggestion & { status: "pending" | "saved" | "dismissed"; id: string; savedRecordId?: string; alreadyExisted?: boolean };
+type Draft = Suggestion & { status: "pending" | "saved" | "dismissed"; id: string; savedRecordId?: string; alreadyExisted?: boolean; savedRevision?: number };
 
 const directions: { value: Direction; label: string }[] = [
   { value: "en-vi", label: "Anh → Việt" },
@@ -174,7 +174,7 @@ export function ChatWorkspace({ historyId }: { historyId?: string }) {
   }
 
   async function saveDraft(item: Draft, source = text) {
-    const { item: savedItem, already_existed } = await readApi<{ item: { id: string }; already_existed: boolean }>(await fetch("/api/vocabulary", {
+    const { item: savedItem, already_existed } = await readApi<{ item: { id: string; revision: number }; already_existed: boolean }>(await fetch("/api/vocabulary", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         term: item.term, kind: item.kind, meaning_vi: item.meaning_vi,
@@ -185,7 +185,7 @@ export function ChatWorkspace({ historyId }: { historyId?: string }) {
         topics: item.topics, tags: item.tags, learning_reason: item.learning_reason
       })
     }));
-    setDrafts((current) => current.map((draft) => draft.id === item.id ? { ...draft, status: "saved", savedRecordId: savedItem.id, alreadyExisted: already_existed } : draft));
+    setDrafts((current) => current.map((draft) => draft.id === item.id ? { ...draft, status: "saved", savedRecordId: savedItem.id, savedRevision: savedItem.revision, alreadyExisted: already_existed } : draft));
   }
 
   async function saveDraftManually(item: Draft) {
@@ -197,10 +197,10 @@ export function ChatWorkspace({ historyId }: { historyId?: string }) {
   }
 
   async function undoSave(item: Draft) {
-    if (!item.savedRecordId || item.alreadyExisted) return;
+    if (!item.savedRecordId || !item.savedRevision || item.alreadyExisted) return;
     setUndoingDraftId(item.id);
     try {
-      await readApi(await fetch(`/api/vocabulary?id=${item.savedRecordId}`, { method: "DELETE" }));
+      await readApi(await fetch(`/api/vocabulary?id=${item.savedRecordId}&undoRevision=${item.savedRevision}`, { method: "DELETE" }));
       setDrafts((current) => current.map((draft) => draft.id === item.id ? { ...draft, status: "pending", savedRecordId: undefined } : draft));
       setNotice(t("Đã hoàn tác lưu từ.", "Word save undone."));
     } catch (err) { setError(err instanceof Error ? err.message : "Không thể hoàn tác."); }

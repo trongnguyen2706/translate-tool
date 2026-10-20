@@ -1,0 +1,22 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>Full dictionary browser benchmark</title><style>body{font:16px/1.6 system-ui;margin:32px;max-width:850px}button{padding:12px;margin:8px}pre{white-space:pre-wrap}</style>
+<h1>Full dictionary browser benchmark</h1><p>Local test profile data on 127.0.0.1:3001. Uses the real dictionary installer and IndexedDB with a mock Chrome API. This does not test Chrome extension worker suspension. It does not access your extension credentials or personal data.</p><button id="run">Install and benchmark full dictionaries</button><button id="clear">Remove benchmark dictionary copies</button><pre id="progress" role="status">Ready</pre><pre id="results"></pre>
+<script type="module">
+const local={}, modes=['en-vi','vi-en','en-en']; let receive;
+window.chrome={runtime:{getURL:p=>new URL('/'+p,location.origin).href,onInstalled:{addListener(){}},onMessage:{addListener(fn){receive=fn}}},alarms:{onAlarm:{addListener(){}}},storage:{local:{async get(){return local},async set(values){Object.assign(local,values);if(values.dictionaryProgress){const p=values.dictionaryProgress;document.querySelector('#progress').textContent=`${p.mode}: ${p.installedEntries}/${p.totalEntries} · ${p.state}`}}}}};
+await import('/modules/background.mjs');
+const {removeDictionary} = await import('/modules/storage.mjs');
+document.querySelector('#clear').onclick=async()=>{for(const mode of modes)await removeDictionary(mode);document.querySelector('#progress').textContent='Benchmark dictionary copies removed. Your installed extension data is unchanged.';};
+const send=(type,values={})=>new Promise((resolve,reject)=>receive({protocol:1,type,...values},{},r=>r.ok?resolve(r.data):reject(new Error(r.error))));
+document.querySelector('#run').onclick=async()=>{
+ document.querySelector('#run').disabled=true;
+ document.querySelector('#clear').disabled=true;
+ try{
+ const before=await navigator.storage.estimate(),memoryBefore=performance.memory?.usedJSHeapSize, rows=[];
+ for(const mode of modes){const start=performance.now();const installed=await send('install-dictionary',{manifestUrl:new URL('/dictionaries/manifest.json',location.origin).href,mode});rows.push({mode,entries:installed.entryCount,compressedBytes:installed.compressedBytes,installSeconds:(performance.now()-start)/1000});}
+ for(const row of rows){const times=[];for(let i=0;i<60;i++){const start=performance.now();await send('lookup',{term:row.mode==='vi-en'?'xin chào':i%2?'bank':'eco-friendly',mode:row.mode});times.push(performance.now()-start);}times.sort((a,b)=>a-b);row.lookupMedianMs=times[30];row.lookupP95Ms=times[57];}
+ const after=await navigator.storage.estimate();
+ document.querySelector('#results').textContent=JSON.stringify({environment:'Chrome page IndexedDB; actual full packs; Chrome messaging mocked',rows,storageBefore:before,storageAfter:after,storageDelta:after.usage-before.usage,heapBefore:memoryBefore,heapAfter:performance.memory?.usedJSHeapSize,measuredAt:new Date().toISOString()},null,2);
+ document.querySelector('#progress').textContent='Complete';
+ }catch(error){document.querySelector('#results').textContent='FAIL '+error.message;}finally{document.querySelector('#run').disabled=false;document.querySelector('#clear').disabled=false;}
+};
+</script></html>

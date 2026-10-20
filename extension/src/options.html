@@ -11,10 +11,11 @@
         <label>Supabase publishable / anon key<input id="supabaseAnonKey" type="password" required autocomplete="off"></label>
         <label>Google OAuth client ID (Web application)<input id="googleClientId" type="text" required placeholder="...apps.googleusercontent.com"></label>
         <label>Dictionary manifest URL<input id="manifestUrl" type="url" placeholder="https://dictionary.example.com/manifest.json"></label>
+        <label class="toggle"><input id="youtubeEnabled" type="checkbox" checked> Enable interactive YouTube captions</label>
         <div class="actions"><button type="submit">Save settings</button><button id="signIn" type="button">Sign in with Google</button></div>
         <button id="signOut" class="secondary" type="button">Sign out</button>
       </form>
-      <p class="hint">Your email is sent during sign-in. Words and source context are sent when you save or request AI enrichment. Downloaded dictionaries work locally.</p>
+      <p class="hint">Your email is sent during sign-in. While signed in, a lookup sends the selected word to check your library. Saving sends the word, selected meaning, source URL and context. AI receives the word and context only when you request it. Downloaded dictionaries work locally.</p>
       <p id="status" role="status"></p>
     </main>
     <script type="module" src="options.mjs"></script>

@@ -1,6 +1,8 @@
 # Kế hoạch Chrome extension tra từ và học flashcard
 
-Ngày lập: 15 tháng 10 năm 2026. Cập nhật: 19 tháng 10 năm 2026. Trạng thái: đang triển khai theo checklist; kết quả và giới hạn môi trường được ghi trong `IMPLEMENTATION_LOG.md`.
+Ngày lập: 15 tháng 10 năm 2026. Cập nhật: 20 tháng 10 năm 2026. Trạng thái: đang triển khai theo checklist; kết quả và giới hạn môi trường được ghi trong `IMPLEMENTATION_LOG.md`.
+
+**Điều chỉnh ngày 20/10:** bỏ nghe phát âm theo yêu cầu; giữ IPA. Chủ dự án chưa có hosting/R2/Store nên phạm vi phát hành hiện là chuẩn bị gói và hướng dẫn, chưa upload/deploy/submission. Xem `docs/extension/RELEASE.md` và nhật ký triển khai.
 
 Extension phủ lớp tương tác lên CC đang hiển thị của YouTube, tra từ trên website bằng từ điển nội bộ, rồi đồng bộ từ và flashcard về Phrasebook. AI chỉ chạy khi người dùng bấm yêu cầu. Thiết kế giữ ID mục từ và tiến độ học hiện có, đồng thời bổ sung nguồn gặp từ và dữ liệu ngữ nghĩa còn thiếu.
 
@@ -85,7 +87,7 @@ flowchart TD
 
 Popup mở khung ngay, không đợi mạng. Nghĩa local xuất hiện trước; kiểm tra trạng thái đã lưu là tác vụ riêng và không chặn đọc nghĩa. Cache cá nhân đã có có thể dùng lại theo đúng nghĩa và chiều tra, đồng thời thể hiện nguồn dữ liệu.
 
-Mở rộng hiển thị IPA, phát âm, từ loại, định nghĩa, ví dụ, collocation, đồng nghĩa và trái nghĩa nếu có. Các trường thiếu có nhãn riêng; không chạy AI để lấp đầy khi mở rộng. Chọn nghĩa khác cập nhật nội dung và trạng thái Lưu tương ứng.
+Mở rộng hiển thị IPA, từ loại, định nghĩa, ví dụ, collocation, đồng nghĩa và trái nghĩa nếu có. Các trường thiếu có nhãn riêng; không chạy AI để lấp đầy khi mở rộng. Chọn nghĩa khác cập nhật nội dung và trạng thái Lưu tương ứng.
 
 Đóng phần mở rộng quay về popup nhỏ; đóng toàn bộ mới giải phóng việc tạm dừng. Di chuyển vào popup hủy timer 300 ms. Đổi từ hủy kết quả cũ về mặt UI; phản hồi đến muộn không được thay nội dung của từ/video mới. Popup hỗ trợ bàn phím, focus và giảm chuyển động theo cài đặt hệ thống.
 
@@ -160,7 +162,7 @@ Production lấy dictionary từ một base URL được cho phép trên domain 
 4. Tra chính xác trước, sau đó đến cụm và biến thể có căn cứ. Không chỉ cắt hậu tố, không bỏ dấu tiếng Việt, không tự đồng nhất tên riêng/chữ viết tắt với từ thường.
 5. Build một gói lõi được kiểm tra trước, rồi mở rộng theo độ phủ và dung lượng đo được. Không tải toàn bộ dump nhiều GB vào extension.
 6. Gói có manifest, checksum, phiên bản schema và thông tin attribution. Tải vào vùng tạm, kiểm tra đủ dữ liệu rồi mới đổi phiên bản đang dùng; lỗi tải giữ gói cũ.
-7. Extension và web cache riêng cùng các gói dữ liệu. Worker xử lý tra cứu để UI không bị chặn. Bổ sung bằng từ điển trên web có thể chạy local rồi gửi patch có giới hạn lên backend.
+7. Extension giữ gói dữ liệu và xử lý tra cứu trong background. Web dùng bridge chỉ đọc từ điển công khai, giới hạn đúng origin Phrasebook đã cấu hình, để dùng lại gói đã tải; không tải thêm một bản lớn vào cache web. Bổ sung bằng từ điển trên web cần extension đang hoạt động; AI và đọc Kho từ vẫn dùng được độc lập. Patch gửi backend có giới hạn và chỉ điền ô trống.
 8. ID nghĩa ngoài phải có nguồn và phiên bản; thứ tự nghĩa trong một dump không được xem là ID ổn định qua mọi lần cập nhật. Mapping qua nguồn/phiên bản cần xác nhận; không tự gộp nghĩa chỉ vì cùng từ.
 
 Gói song ngữ có thể dùng chung dữ liệu nền với hai chỉ mục Anh–Việt và Việt–Anh để tránh tải hai bản nội dung trùng nhau. Chỉ kích hoạt gói cần cho chế độ đang chọn. Đo riêng dung lượng nén truyền qua mạng, dung lượng IndexedDB sau cài gồm index, RAM tăng khi chạy và thời gian cài đặt trên profile mới. Kích thước file tải không đại diện cho RAM hoặc dung lượng đã giải nén.
