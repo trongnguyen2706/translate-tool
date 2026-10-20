@@ -5,8 +5,8 @@ import { requestJson } from "../extension/src/network.mjs";
 test("enrichment transport returns JSON and preserves server errors", async (t) => {
   t.mock.method(globalThis, "fetch", async () => Response.json({ fields: { definitions: ["xin chào"] } }));
   assert.deepEqual(await requestJson("https://example.test/enrich"), { fields: { definitions: ["xin chào"] } });
-  globalThis.fetch.mock.mockImplementation(async () => Response.json({ error: "Bạn đã hết lượt AI hôm nay." }, { status: 429 }));
-  await assert.rejects(requestJson("https://example.test/enrich"), /hết lượt AI/);
+  globalThis.fetch.mock.mockImplementation(async () => Response.json({ error: "You have reached your daily AI limit." }, { status: 429 }));
+  await assert.rejects(requestJson("https://example.test/enrich"), /daily AI limit/);
 });
 
 test("a stopped local server and an HTML error page produce actionable messages", async (t) => {
@@ -21,5 +21,5 @@ test("a stalled AI request is aborted instead of waiting indefinitely", async (t
     const timer = setTimeout(() => resolve(Response.json({})), 200);
     signal.addEventListener("abort", () => { clearTimeout(timer); reject(signal.reason); }, { once: true });
   }));
-  await assert.rejects(requestJson("https://example.test/enrich", {}, 10), /quá thời gian chờ/);
+  await assert.rejects(requestJson("https://example.test/enrich", {}, 10), /timed out/);
 });

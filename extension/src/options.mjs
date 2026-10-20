@@ -10,19 +10,19 @@ $("#settings").addEventListener("submit", async (event) => {
   event.preventDefault();
   const values = Object.fromEntries(fields.map((field) => [field, $(`#${field}`).value.trim()]));
   await chrome.storage.local.set(values);
-  $("#status").textContent = "Đã lưu cấu hình.";
+  $("#status").textContent = "Settings saved.";
 });
 
 $("#signIn").addEventListener("click", async () => {
-  $("#status").textContent = "Đang mở đăng nhập Google…";
+  $("#status").textContent = "Opening Google sign-in…";
   const values = Object.fromEntries(fields.map((field) => [field, $(`#${field}`).value.trim()]));
   const result = await chrome.runtime.sendMessage({ protocol: 1, type: "sign-in", config: values });
-  $("#status").textContent = result.ok ? `Đã đăng nhập ${result.data.email}.` : result.error;
+  $("#status").textContent = result.ok ? `Signed in as ${result.data.email}.` : result.error;
 });
 
 $("#signOut").addEventListener("click", async () => {
   const result = await chrome.runtime.sendMessage({ protocol: 1, type: "sign-out" });
-  $("#status").textContent = result.ok ? "Đã đăng xuất. Hàng đợi của tài khoản cũ được giữ lại." : result.error;
+  $("#status").textContent = result.ok ? "Signed out. The previous account's pending saves have been kept." : result.error;
 });
 
 void load();

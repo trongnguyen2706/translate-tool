@@ -30,7 +30,7 @@ export function OPTIONS(request: Request) { return extensionOptions(request); }
 export async function POST(request: Request) {
   const session = await getAllowedBearerSession(request);
   if (!session) return extensionResponse(request, { error: "Authentication required" }, 401);
-  if (!hasOpenAIConfig()) return extensionResponse(request, { error: "AI chưa được cấu hình" }, 503);
+  if (!hasOpenAIConfig()) return extensionResponse(request, { error: "AI is not configured" }, 503);
   let raw: unknown;
   try { raw = await request.json(); } catch { return extensionResponse(request, { error: "Invalid JSON" }, 400); }
   const parsed = schema.safeParse(raw);
@@ -38,7 +38,7 @@ export async function POST(request: Request) {
   try {
     const requestId = crypto.randomUUID();
     if (!await checkDailyLimit(session.supabase, "suggestion", requestId)) {
-      return extensionResponse(request, { error: "Bạn đã hết lượt AI hôm nay." }, 429);
+      return extensionResponse(request, { error: "You have reached your daily AI limit." }, 429);
     }
 
     const { term, mode, context, fields: requested, current } = parsed.data;
@@ -61,7 +61,7 @@ export async function POST(request: Request) {
     }, { timeout: 30_000, maxRetries: 0 });
     await recordUsage(session.supabase, "suggestion", response.usage?.input_tokens ?? 0, response.usage?.output_tokens ?? 0, requestId);
     if (response.status !== "completed" || !response.output_text) {
-      return extensionResponse(request, { error: "AI chưa trả về kết quả đầy đủ. Hãy thử lại với một từ hoặc cụm từ ngắn." }, 502);
+      return extensionResponse(request, { error: "AI returned an incomplete result. Try a shorter word or phrase." }, 502);
     }
     const decoded = JSON.parse(response.output_text || "{}");
     const result: Record<string, string | string[]> = {};
@@ -74,15 +74,15 @@ export async function POST(request: Request) {
       else if (Array.isArray(value)) result[field] = value.filter((part): part is string => typeof part === "string" && Boolean(part.trim())).slice(0, field === "definitions" ? 6 : field === "examples" || field === "collocations" ? 6 : 12).map((part) => part.trim().slice(0, 500));
     }
     if (decoded.definitionLanguage !== definitionLanguage(mode) || hasDefinitionLanguageMismatch(Array.isArray(result.definitions) ? result.definitions : [], mode)) {
-      return extensionResponse(request, { error: "AI trả nghĩa sai ngôn ngữ của chế độ đã chọn. Nội dung chưa được áp dụng; hãy thử lại." }, 502);
+      return extensionResponse(request, { error: "AI returned a definition in the wrong language. Nothing was applied. Please try again." }, 502);
     }
     return extensionResponse(request, { mode, definitionLanguage: definitionLanguage(mode), fields: result });
   } catch (error) {
     const detail = error as { name?: string; status?: number; code?: string };
     console.error("Extension enrichment failed", { name: detail?.name, status: detail?.status, code: detail?.code });
-    if (detail?.name === "APIConnectionTimeoutError") return extensionResponse(request, { error: "AI phản hồi quá 30 giây. Hãy thử lại sau." }, 504);
-    if (detail?.status === 429) return extensionResponse(request, { error: "Dịch vụ AI đang giới hạn lượt gọi hoặc tài khoản API hết hạn mức. Kiểm tra cấu hình API trên server." }, 503);
-    if (detail?.status === 401 || detail?.status === 403) return extensionResponse(request, { error: "Server chưa được cấp quyền gọi AI. Kiểm tra API key và quyền dùng model." }, 503);
-    return extensionResponse(request, { error: "Không thể bổ sung thông tin lúc này." }, 502);
+    if (detail?.name === "APIConnectionTimeoutError") return extensionResponse(request, { error: "AI took longer than 30 seconds. Please try again later." }, 504);
+    if (detail?.status === 429) return extensionResponse(request, { error: "AI is rate limited or the API account has reached its quota. Check the server API configuration." }, 503);
+    if (detail?.status === 401 || detail?.status === 403) return extensionResponse(request, { error: "The server cannot access AI. Check its API key and model permissions." }, 503);
+    return extensionResponse(request, { error: "Enrichment is unavailable right now. Please try again later." }, 502);
   }
 }

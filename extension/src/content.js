@@ -5,9 +5,10 @@
   const PROTOCOL = 1;
   const isYouTube = location.hostname === "www.youtube.com";
   const videoContext = { video: null, pausedByUs: false, pausedAt: 0 };
-  const state = { config: {}, popup: null, activeWord: null, closeTimer: 0, sequence: 0, selection: null, selectionDirty: false, selectionAtPointerDown: "", lastSelectionSignature: "", ignoreClickUntil: 0, hoverWord: null, hoverFrame: 0 };
+  const state = { config: {}, popup: null, activeWord: null, closeTimer: 0, sequence: 0, selection: null, selectionDirty: false, selectionAtPointerDown: "", lastSelectionSignature: "", ignoreClickUntil: 0, hoverWord: null, hoverFrame: 0, hoverPoint: null, pointer: null, pointerVersion: 0 };
   const host = document.createElement("div");
   host.id = "phrasebook-extension-root";
+  host.lang = "en";
   // Keep the overlay out of the player's stacking context in normal/theater view.
   host.style.cssText = "all:initial!important;position:fixed!important;inset:0!important;display:block!important;z-index:2147483647!important;pointer-events:none!important;isolation:isolate!important;";
   (document.documentElement || document.body).append(host);
@@ -47,7 +48,7 @@
   }
 
   function safeText(value) { return typeof value === "string" ? value : ""; }
-  function modeLabel(mode) { return ({ "en-en": "Anh → Anh", "en-vi": "Anh → Việt", "vi-en": "Việt → Anh" })[mode] ?? "Anh → Việt"; }
+  function modeLabel(mode) { return ({ "en-en": "English → English", "en-vi": "English → Vietnamese", "vi-en": "Vietnamese → English" })[mode] ?? "English → Vietnamese"; }
 
   function mountPoint() {
     return document.fullscreenElement || document.documentElement;
@@ -78,7 +79,13 @@
     let left = rect.left - bounds.left + rect.width / 2 - width / 2;
     let top = rect.bottom - bounds.top + 12;
     left = Math.max(8, Math.min(left, bounds.width - width - 8));
-    if (top + height > bounds.height - 8) top = rect.top - bounds.top - height - 12;
+    if (box === state.popup && state.activeWord) {
+      const below = bounds.bottom - rect.bottom - 12;
+      const above = rect.top - bounds.top - 12;
+      // Keep the same edge through loading, result and saved-status updates.
+      state.activeWord.placement ??= below < Math.min(360, bounds.height - 24) && above > below ? "above" : "below";
+      if (state.activeWord.placement === "above") top = rect.top - bounds.top - height - 12;
+    } else if (top + height > bounds.height - 8) top = rect.top - bounds.top - height - 12;
     top = Math.max(8, Math.min(top, bounds.height - height - 8));
     box.style.left = `${left}px`;
     box.style.top = `${top}px`;
@@ -90,8 +97,8 @@
     const button = document.createElement("button");
     button.className = "pbx-action";
     button.type = "button";
-    button.textContent = "Tra";
-    button.setAttribute("aria-label", `Tra từ ${selectedText}`);
+    button.textContent = "Look up";
+    button.setAttribute("aria-label", `Look up ${selectedText}`);
     // Retain the native selection until click has consumed the captured text.
     button.addEventListener("mousedown", (event) => event.preventDefault());
     button.addEventListener("click", (event) => {
@@ -216,12 +223,13 @@
     if (state.hoverWord && !state.hoverWord.isConnected) setHoverWord(null);
   }
 
+  document.addEventListener("pointermove", onLookupPointerMove, true);
+
   if (isYouTube) {
     const observer = new MutationObserver(activateCaptions);
     observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
     activateCaptions();
     document.addEventListener("click", onCaptionClick, true);
-    document.addEventListener("pointermove", onCaptionPointerMove, true);
     document.addEventListener("pointerout", (event) => { if (!event.relatedTarget) setHoverWord(null); }, true);
     document.addEventListener("mousedown", (event) => {
       if (event.target instanceof Element && event.target.closest(".pbx-word")) event.stopPropagation();
@@ -253,19 +261,29 @@
     state.hoverWord = word;
     word?.classList.add("pbx-hover");
     document.querySelector("#movie_player")?.classList.toggle("pbx-word-target", Boolean(word));
-    if (word) clearTimeout(state.closeTimer);
-    else if (state.popup) scheduleClose();
   }
 
-  function onCaptionPointerMove(event) {
-    // composedPath is only available during dispatch, before the animation frame.
+  function onLookupPointerMove(event) {
     const inOverlay = event.composedPath().includes(host);
     const point = { target: event.target, clientX: event.clientX, clientY: event.clientY };
-    cancelAnimationFrame(state.hoverFrame);
-    state.hoverFrame = requestAnimationFrame(() => {
-      setHoverWord(inOverlay ? null : captionWordAt(point));
-      if (inOverlay) clearTimeout(state.closeTimer);
-    });
+    state.pointer = point;
+    state.pointerVersion += 1;
+    if (inOverlay || pointerOverLookup(point)) cancelClose();
+    else scheduleClose();
+    if (!isYouTube) return;
+    state.hoverPoint = point;
+    const direct = !inOverlay && event.target instanceof Element ? event.target.closest(".ytp-caption-segment .pbx-word") : null;
+    if (inOverlay || direct) {
+      cancelAnimationFrame(state.hoverFrame);
+      state.hoverFrame = 0;
+      setHoverWord(direct);
+    } else if (!state.hoverFrame) {
+      // Coalesce the fallback hit-test instead of cancelling every frame during fast motion.
+      state.hoverFrame = requestAnimationFrame(() => {
+        state.hoverFrame = 0;
+        setHoverWord(captionWordAt(state.hoverPoint));
+      });
+    }
   }
 
   function onCaptionClick(event) {
@@ -299,13 +317,13 @@
   }
 
   async function openPopup(term, rect, capture, anchor = null) {
-    clearTimeout(state.closeTimer);
+    cancelClose();
     const queryTerm = term;
     term = term.replace(/[\u2010\u2011]/g, "-");
     const mode = state.config.mode ?? "en-vi";
     state.activeWord?.anchor?.classList.remove("pbx-active");
     if (anchor?.matches(".pbx-word")) anchor.classList.add("pbx-active");
-    state.activeWord = { term, queryTerm, rect, capture, mode, anchor };
+    state.activeWord = { term, queryTerm, rect, capture, mode, anchor, loading: true, openedPointerVersion: state.pointerVersion };
     const sequence = ++state.sequence;
     if (!state.popup) createPopup();
     renderLoading(term);
@@ -315,9 +333,11 @@
       response = await send("lookup", { term, mode });
     } catch (error) {
       if (sequence !== state.sequence || state.popup === null) return;
-      return showError(error instanceof Error ? error.message : "Không thể tra từ điển");
+      state.activeWord.loading = false;
+      return showError(error instanceof Error ? error.message : "Dictionary lookup failed");
     }
     if (sequence !== state.sequence || state.popup === null) return;
+    state.activeWord.loading = false;
     if (!response.ok) return showError(response.error);
     const lookup = response.data;
     const statusTerm = mode === "vi-en" && lookup.result?.senses?.[0]?.sourceTerm ? lookup.result.senses[0].sourceTerm : term;
@@ -335,9 +355,10 @@
     const card = document.createElement("section");
     card.className = "pbx-card";
     card.setAttribute("role", "dialog");
-    card.setAttribute("aria-label", "Tra từ Phrasebook");
-    card.addEventListener("pointerenter", () => clearTimeout(state.closeTimer));
-    card.addEventListener("pointerleave", scheduleClose);
+    card.setAttribute("aria-label", "Phrasebook lookup");
+    card.addEventListener("pointerenter", cancelClose);
+    // Layout changes can fire pointerleave without any actual mouse movement.
+    // Dismissal is driven only by document pointermove and rechecked on timeout.
     card.addEventListener("click", (event) => event.stopPropagation());
     shadow.append(card);
     state.popup = card;
@@ -346,7 +367,7 @@
   }
 
   function renderLoading(term) {
-    state.popup.innerHTML = `<div class="pbx-head"><div><h2 class="pbx-term"></h2><div class="pbx-meta"></div></div><button class="pbx-close" aria-label="Đóng">×</button></div><div class="pbx-content"><p>Đang tra từ điển trên máy…</p></div><div class="pbx-status" role="status"></div>`;
+    state.popup.innerHTML = `<div class="pbx-head"><div><h2 class="pbx-term"></h2><div class="pbx-meta"></div></div><button class="pbx-close" aria-label="Close">×</button></div><div class="pbx-content"><p>Looking up the local dictionary…</p></div><div class="pbx-status" role="status"></div>`;
     state.popup.querySelector(".pbx-term").textContent = term;
     state.popup.querySelector(".pbx-meta").textContent = modeLabel(state.activeWord.mode);
     state.popup.querySelector(".pbx-close").addEventListener("click", closePopup);
@@ -356,13 +377,14 @@
     const active = state.activeWord;
     active.lookup = lookup;
     active.saved = saved;
+    if (active.saving) return; // Keep controls stable until the current click has finished saving.
     const mode = lookup.mode ?? state.config.mode ?? "en-vi";
     active.dataVersion = lookup.dataVersion ?? "";
     const result = lookup.result;
     const senses = result?.senses ?? [];
     const sense = active?.selectedSense ?? senses[0] ?? null;
     const savedItem = findSavedSense(saved, mode, sense, active.term);
-    const head = `<div class="pbx-head"><div><h2 class="pbx-term"></h2><div class="pbx-meta">${modeLabel(mode)}${sense?.ipa ? ` · ${escapeHtml(sense.ipa)}` : ""}</div></div><button class="pbx-close" aria-label="Đóng">×</button></div>`;
+    const head = `<div class="pbx-head"><div><h2 class="pbx-term"></h2><div class="pbx-meta">${modeLabel(mode)}${sense?.ipa ? ` · ${escapeHtml(sense.ipa)}` : ""}</div></div><button class="pbx-close" aria-label="Close">×</button></div>`;
     state.popup.innerHTML = head;
     state.popup.querySelector(".pbx-term").textContent = mode === "vi-en" && sense?.sourceTerm ? `${active.term} → ${sense.sourceTerm}` : active.term;
     state.popup.querySelector(".pbx-close").addEventListener("click", closePopup);
@@ -372,23 +394,23 @@
     if (!senses.length) {
       const missing = document.createElement("p");
       missing.className = "pbx-missing";
-      missing.textContent = lookup.missingPack ? "Chưa tải từ điển cho chế độ này." : "Từ điển chưa có nghĩa cho từ này.";
+      missing.textContent = lookup.missingPack ? "No dictionary installed for this mode." : "This word is not in the dictionary yet.";
       content.append(missing);
       if (lookup.missingPack) {
-        const settings = makeButton("Cài từ điển", "pbx-btn", () => { void send("open-settings").catch((error) => showError(error.message)); });
+        const settings = makeButton("Install dictionary", "pbx-btn", () => { void send("open-settings").catch((error) => showError(error.message)); });
         content.append(settings);
       }
-      const ai = makeButton("Bổ sung bằng AI", "pbx-btn", () => requestEnrichment(active, mode, sense));
+      const ai = makeButton("Fill with AI", "pbx-btn", () => requestEnrichment(active, mode, sense));
       ai.disabled = Boolean(active.enriching);
-      if (active.enriching) ai.textContent = "AI đang xử lý…";
+      if (active.enriching) ai.textContent = "AI is working…";
       content.append(ai);
     } else {
       if (senses.length > 1) {
-        const select = document.createElement("select"); select.className = "pbx-sense"; select.setAttribute("aria-label", "Chọn nghĩa");
+        const select = document.createElement("select"); select.className = "pbx-sense"; select.setAttribute("aria-label", "Choose a meaning");
         select.disabled = Boolean(active.enriching);
         senses.forEach((item, index) => {
           const option = document.createElement("option"); option.value = String(index);
-          option.textContent = `${item.partOfSpeech ? `${item.partOfSpeech}: ` : ""}${item.definitions?.[0] ?? `Nghĩa ${index + 1}`}`;
+          option.textContent = `${item.partOfSpeech ? `${item.partOfSpeech}: ` : ""}${item.definitions?.[0] ?? `Meaning ${index + 1}`}`;
           select.append(option);
         });
         select.value = String(Math.max(0, senses.indexOf(sense)));
@@ -406,13 +428,13 @@
         content.append(select);
       }
       const definition = document.createElement("p"); definition.className = "pbx-definition";
-      definition.textContent = sense?.definitions?.[0] ?? "Chưa có nghĩa cơ bản";
+      definition.textContent = sense?.definitions?.[0] ?? "No definition available";
       content.append(definition);
       if (sense?.examples?.[0]) { const example = document.createElement("p"); example.className = "pbx-example"; example.textContent = sense.examples[0]; content.append(example); }
       const missing = getMissing(sense);
-      if (mode === "vi-en" && !sense?.sourceTerm) missing.push("từ tiếng Anh để tạo flashcard (bấm Bổ sung bằng AI)");
-      if (missing.length) { const note = document.createElement("p"); note.className = "pbx-missing"; note.textContent = `Chưa có: ${missing.join(", ")}.`; content.append(note); }
-      content.append(makeButton(active.enriching ? "AI đang xử lý…" : "Bổ sung bằng AI", "pbx-btn", () => requestEnrichment(active, mode, sense), Boolean(active.enriching)));
+      if (mode === "vi-en" && !sense?.sourceTerm) missing.push("English headword for flashcards (click Fill with AI)");
+      if (missing.length) { const note = document.createElement("p"); note.className = "pbx-missing"; note.textContent = `Missing: ${missing.join(", ")}.`; content.append(note); }
+      content.append(makeButton(active.enriching ? "AI is working…" : "Fill with AI", "pbx-btn", () => requestEnrichment(active, mode, sense), Boolean(active.enriching)));
     }
     state.popup.append(content);
 
@@ -420,18 +442,18 @@
     if (sense) renderDetails(details, sense);
     state.popup.append(details);
     const status = document.createElement("div"); status.className = "pbx-status"; status.setAttribute("role", "status");
-    status.textContent = savedItem ? "Đã có nghĩa này trong kho" : saved.items?.length ? "Từ này đã có nghĩa khác trong kho" : saved.state === "needs_auth" ? "Đăng nhập để lưu và đồng bộ" : "";
+    status.textContent = savedItem ? "This meaning is already in your library" : saved.items?.length ? "Another meaning of this word is in your library" : saved.state === "needs_auth" ? "Sign in to save and sync" : "";
     if (active.enrichmentStatus) status.textContent = active.enrichmentStatus;
     if (active.enrichmentError) status.dataset.kind = "error";
     state.popup.append(status);
 
     const footer = document.createElement("div"); footer.className = "pbx-foot";
-    footer.append(makeButton(active.expanded ? "Thu nhỏ" : "Mở rộng", "pbx-btn", () => {
+    footer.append(makeButton(active.expanded ? "Collapse" : "Expand", "pbx-btn", () => {
       active.expanded = !active.expanded;
       renderResult(lookup, saved);
       place(active.rect, state.popup);
     }));
-    footer.append(makeButton(savedItem ? "Đã lưu" : "Lưu", "pbx-btn pbx-primary", () => saveWord(active, mode, sense, status, footer), Boolean(savedItem) || Boolean(active.enriching)));
+    footer.append(makeButton(savedItem ? "Saved" : "Save", "pbx-btn pbx-primary", () => saveWord(active, mode, sense, status, footer), Boolean(savedItem) || Boolean(active.enriching)));
     state.popup.append(footer);
     state.popup.dataset.expanded = active.expanded ? "true" : "false";
     place(active.rect, state.popup);
@@ -439,12 +461,12 @@
 
   function getMissing(sense) {
     const fields = [];
-    if (!sense?.definitions?.length) fields.push("nghĩa");
+    if (!sense?.definitions?.length) fields.push("definition");
     if (!sense?.ipa) fields.push("IPA");
-    if (!sense?.examples?.length) fields.push("ví dụ");
-    if (!sense?.synonyms?.length) fields.push("đồng nghĩa");
-    if (!sense?.antonyms?.length) fields.push("trái nghĩa");
-    if (!sense?.collocations?.length) fields.push("cụm từ đi kèm");
+    if (!sense?.examples?.length) fields.push("examples");
+    if (!sense?.synonyms?.length) fields.push("synonyms");
+    if (!sense?.antonyms?.length) fields.push("antonyms");
+    if (!sense?.collocations?.length) fields.push("collocations");
     return fields;
   }
 
@@ -466,13 +488,13 @@
   }
 
   function renderDetails(parent, sense) {
-    if (sense.partOfSpeech) addDetail(parent, "Từ loại", sense.partOfSpeech);
+    if (sense.partOfSpeech) addDetail(parent, "Part of speech", sense.partOfSpeech);
     if (sense.ipa) addDetail(parent, "IPA", sense.ipa);
-    for (const [label, key] of [["Định nghĩa", "definitions"], ["Ví dụ", "examples"], ["Kết hợp từ", "collocations"], ["Đồng nghĩa", "synonyms"], ["Trái nghĩa", "antonyms"]]) {
+    for (const [label, key] of [["Definitions", "definitions"], ["Examples", "examples"], ["Collocations", "collocations"], ["Synonyms", "synonyms"], ["Antonyms", "antonyms"]]) {
       const values = sense[key];
       if (Array.isArray(values) && values.length) addList(parent, label, values);
     }
-    if (!parent.childElementCount) { const p = document.createElement("p"); p.textContent = "Chưa có thông tin chi tiết."; parent.append(p); }
+    if (!parent.childElementCount) { const p = document.createElement("p"); p.textContent = "No details available yet."; parent.append(p); }
   }
 
   function addDetail(parent, label, value) { const group = document.createElement("div"); const title = document.createElement("h3"); title.textContent = label; const text = document.createElement("p"); text.textContent = safeText(value); group.append(title, text); parent.append(group); }
@@ -481,23 +503,23 @@
 
   async function requestEnrichment(active, mode, sense) {
     if (active.enriching || active !== state.activeWord) return;
-    const fields = getMissing(sense).map((field) => ({ nghĩa: "definitions", IPA: "ipa", "ví dụ": "examples", "đồng nghĩa": "synonyms", "trái nghĩa": "antonyms", "cụm từ đi kèm": "collocations" })[field]).filter(Boolean);
+    const fields = getMissing(sense).map((field) => ({ definition: "definitions", IPA: "ipa", examples: "examples", synonyms: "synonyms", antonyms: "antonyms", collocations: "collocations" })[field]);
     if (!fields.length && mode === "vi-en" && !sense?.sourceTerm) fields.push("definitions");
     if (!fields.length) {
-      active.enrichmentStatus = "Mục từ này đã có đủ thông tin; không cần gọi AI.";
+      active.enrichmentStatus = "All fields are complete. No AI request is needed.";
       renderResult(active.lookup, active.saved ?? { state: "unknown", items: [] });
       return;
     }
-    clearTimeout(state.closeTimer);
+    cancelClose();
     active.enriching = true;
     active.enrichmentError = false;
-    active.enrichmentStatus = "AI đang xử lý… Bạn chỉ cần bấm một lần.";
+    active.enrichmentStatus = "AI is working… You only need to click once.";
     renderResult(active.lookup, active.saved ?? { state: "unknown", items: [] });
     try {
       const result = await send("enrich", { term: active.term, mode, context: active.capture.context, fields, current: sense ?? {} });
       if (active !== state.activeWord || !state.popup) return;
-      if (!result.ok) throw new Error(result.error || "Không thể bổ sung bằng AI");
-      if (result.data?.mode !== mode || result.data?.definitionLanguage !== (mode === "en-vi" ? "vi" : "en")) throw new Error("Kết quả AI không khớp chế độ tra. Hãy tải lại extension và thử lại.");
+      if (!result.ok) throw new Error(result.error || "AI enrichment failed");
+      if (result.data?.mode !== mode || result.data?.definitionLanguage !== (mode === "en-vi" ? "vi" : "en")) throw new Error("The AI response does not match this dictionary mode. Reload the extension and try again.");
       const additions = result.data?.fields ?? {};
       const enrichedSense = { definitions: [], examples: [], synonyms: [], antonyms: [], collocations: [], ...sense };
       enrichedSense.glossLanguage = result.data.definitionLanguage;
@@ -515,10 +537,10 @@
       if (selectedIndex >= 0) senses[selectedIndex] = enrichedSense;
       else senses.push(enrichedSense);
       active.lookup = { ...active.lookup, result: { ...(active.lookup?.result ?? {}), senses } };
-      active.enrichmentStatus = added.length ? "Đã bổ sung vào bản xem trước. Nhấn Lưu để thêm vào kho." : "AI không tìm thấy thông tin chắc chắn cho các mục còn thiếu.";
+      active.enrichmentStatus = added.length ? "Preview updated. Click Save to add it to your library." : "AI could not find reliable information for the missing fields.";
     } catch (error) {
       active.enrichmentError = true;
-      active.enrichmentStatus = error instanceof Error ? error.message : "Không thể bổ sung bằng AI. Hãy thử lại.";
+      active.enrichmentStatus = error instanceof Error ? error.message : "AI enrichment failed. Please try again.";
     } finally {
       active.enriching = false;
       if (active === state.activeWord && state.popup) renderResult(active.lookup, active.saved ?? { state: "unknown", items: [] });
@@ -527,32 +549,62 @@
 
   async function saveWord(active, mode, sense, status, footer) {
     const canonicalTerm = mode === "vi-en" ? sense?.sourceTerm : active.term;
-    if (!canonicalTerm) { status.textContent = "Chưa có từ tiếng Anh để tạo flashcard."; status.dataset.kind = "error"; return; }
+    if (!canonicalTerm) { status.textContent = "An English headword is required to create a flashcard."; status.dataset.kind = "error"; return; }
     const saveButton = footer.querySelector(".pbx-primary");
     saveButton.disabled = true;
-    status.textContent = "Đang lưu trên máy…";
-    const result = await send("save-capture", { capture: {
-      operationId: crypto.randomUUID(), term: canonicalTerm, queryTerm: active.queryTerm, phrase: canonicalTerm.trim().split(/\s+/).length > 1,
-      mode, selectedSense: sense ? { ...sense, dataVersion: active.dataVersion } : null, context: active.capture.context, pageUrl: active.capture.pageUrl ?? location.href,
-      pageTitle: active.capture.pageTitle ?? document.title, videoTime: active.capture.videoTime ?? null
-    } });
-    if (!result.ok) { status.textContent = result.error; status.dataset.kind = "error"; saveButton.disabled = false; return; }
-    status.textContent = "Đã lưu trên máy · chờ đồng bộ";
-    saveButton.textContent = "Đã lưu";
+    active.saving = true;
+    cancelClose();
+    const controls = [...state.popup.querySelectorAll(".pbx-btn,.pbx-sense")].filter((control) => control !== saveButton).map((control) => [control, control.disabled]);
+    for (const [control] of controls) control.disabled = true;
+    status.textContent = "Saving locally…";
+    try {
+      const result = await send("save-capture", { capture: {
+        operationId: crypto.randomUUID(), term: canonicalTerm, queryTerm: active.queryTerm, phrase: canonicalTerm.trim().split(/\s+/).length > 1,
+        mode, selectedSense: sense ? { ...sense, dataVersion: active.dataVersion } : null, context: active.capture.context, pageUrl: active.capture.pageUrl ?? location.href,
+        pageTitle: active.capture.pageTitle ?? document.title, videoTime: active.capture.videoTime ?? null
+      } });
+      if (!result.ok) throw new Error(result.error || "Could not save this word.");
+      status.textContent = "Saved locally · waiting to sync";
+      saveButton.textContent = "Saved";
+    } catch (error) {
+      status.textContent = error instanceof Error ? error.message : "Could not save this word. Please try again.";
+      status.dataset.kind = "error";
+      saveButton.disabled = false;
+    } finally {
+      active.saving = false;
+      for (const [control, disabled] of controls) control.disabled = disabled;
+    }
   }
 
   function showError(message) {
     const status = state.popup?.querySelector(".pbx-status");
     if (status) { status.textContent = message; status.dataset.kind = "error"; }
   }
-  function scheduleClose() {
+  function cancelClose() {
     clearTimeout(state.closeTimer);
-    if (state.activeWord?.enriching) return;
-    if (state.popup?.dataset.expanded === "true") return;
-    state.closeTimer = setTimeout(closePopup, 300);
+    state.closeTimer = 0;
+  }
+  function scheduleClose() {
+    const active = state.activeWord;
+    if (!active || active.loading || active.enriching || active.saving || active.expanded) return;
+    if (state.pointerVersion <= active.openedPointerVersion || pointerOverLookup(state.pointer)) return;
+    // Do not restart this timer on every move: a continuous move away should close promptly.
+    if (state.closeTimer) return;
+    state.closeTimer = setTimeout(() => {
+      state.closeTimer = 0;
+      if (active === state.activeWord && !active.loading && !active.enriching && !active.saving && !active.expanded && !pointerOverLookup(state.pointer)) closePopup();
+    }, 300);
+  }
+
+  function pointerOverLookup(point) {
+    if (!point || !state.popup || !state.activeWord) return false;
+    const inside = (rect, margin) => point.clientX >= rect.left - margin && point.clientX <= rect.right + margin && point.clientY >= rect.top - margin && point.clientY <= rect.bottom + margin;
+    if (inside(state.popup.getBoundingClientRect(), 12)) return true;
+    const anchor = state.activeWord.anchor;
+    return anchor?.isConnected ? [...anchor.getClientRects()].some((rect) => inside(rect, 4)) : inside(state.activeWord.rect, 4);
   }
   function closePopup() {
-    clearTimeout(state.closeTimer);
+    cancelClose();
     state.sequence += 1;
     state.activeWord?.anchor?.classList.remove("pbx-active");
     state.popup?.remove(); state.popup = null; state.activeWord = null;
@@ -563,7 +615,10 @@
     videoContext.video = null; videoContext.pausedByUs = false;
   }
   function onEscape(event) { if (event.key === "Escape") { event.preventDefault(); closePopup(); } }
-  function onOutside(event) { if (!event.composedPath().includes(host)) closePopup(); }
+  function onOutside(event) {
+    if (event.composedPath().includes(host) || (isYouTube && captionWordAt(event))) return;
+    closePopup();
+  }
   function escapeHtml(value) { return safeText(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" })[char]); }
 
   void send("get-config").then((response) => {

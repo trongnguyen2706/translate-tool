@@ -62,7 +62,7 @@ test("dictionary installs activate atomically, preserve the old version on failu
   assert.equal((await lookup()).data.result.senses[0].definitions[0], "ngân hàng");
 
   current = repository("test-v2", [[row("bank", "nội dung đã đổi")], [row("hello", "xin chào")]]);
-  assert.match((await install()).error, /chưa tăng phiên bản/);
+  assert.match((await install()).error, /without a new data version/);
   current = next;
   failPath = "";
   assert.equal((await install()).ok, true);

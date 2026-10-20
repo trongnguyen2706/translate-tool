@@ -65,13 +65,13 @@ async function readStatus(modeInput, term) {
     method: "POST", headers: { "Authorization": `Bearer ${account.accessToken}`, "Content-Type": "application/json" },
     body: JSON.stringify({ term, mode })
   });
-  if (!response.ok) throw new Error(response.status === 401 ? "Cần đăng nhập lại" : "Không thể kiểm tra kho từ");
+  if (!response.ok) throw new Error(response.status === 401 ? "Please sign in again" : "Could not check your library");
   return response.json();
 }
 
 async function enrich(message) {
   const account = await getAuthorizedAccount();
-  if (!account?.accessToken) throw new Error("Đăng nhập để dùng AI bổ sung từ");
+  if (!account?.accessToken) throw new Error("Sign in to use AI enrichment");
   const origin = validateAppOrigin(account.appOrigin ?? APP_ORIGIN_DEFAULT);
   return requestJson(`${origin}/api/extension/enrich`, {
     method: "POST", headers: { "Authorization": `Bearer ${account.accessToken}`, "Content-Type": "application/json" },
@@ -80,12 +80,12 @@ async function enrich(message) {
 }
 
 async function saveCapture(input, sender) {
-  if (!input || typeof input.term !== "string" || !input.term.trim() || input.term.length > 120) throw new Error("Từ không hợp lệ");
+  if (!input || typeof input.term !== "string" || !input.term.trim() || input.term.length > 120) throw new Error("Invalid word");
   const account = (await chrome.storage.local.get("account")).account;
-  if (!account?.userId) throw new Error("Đăng nhập Phrasebook trước khi lưu để gắn đúng tài khoản");
+  if (!account?.userId) throw new Error("Sign in to Phrasebook before saving words");
   const operationId = input.operationId || crypto.randomUUID();
   const url = new URL(sender.tab?.url ?? input.pageUrl ?? "https://www.youtube.com/");
-  if (!/^https?:$/.test(url.protocol)) throw new Error("Trang nguồn không hợp lệ");
+  if (!/^https?:$/.test(url.protocol)) throw new Error("Invalid source page");
   const capture = {
     operationId, accountId: account.userId,
     term: input.term.trim(), queryTerm: String(input.queryTerm ?? input.term).trim(), phrase: Boolean(input.phrase), mode: normalizeMode(input.mode),
@@ -117,18 +117,18 @@ async function signIn(input) {
   authorize.searchParams.set("nonce", hashedNonce);
   authorize.searchParams.set("prompt", "select_account");
   const redirect = await chrome.identity.launchWebAuthFlow({ url: authorize.href, interactive: true });
-  if (!redirect) throw new Error("Đăng nhập chưa hoàn tất");
+  if (!redirect) throw new Error("Sign-in was not completed");
   const params = new URLSearchParams(new URL(redirect).hash.slice(1));
-  if (params.get("state") !== state) throw new Error("Xác thực state không hợp lệ");
+  if (params.get("state") !== state) throw new Error("Invalid sign-in state");
   const idToken = params.get("id_token");
-  if (!idToken) throw new Error("Google không trả về ID token");
+  if (!idToken) throw new Error("Google did not return an ID token");
 
   const response = await fetch(`${config.supabaseUrl}/auth/v1/token?grant_type=id_token`, {
     method: "POST", headers: { "apikey": config.supabaseAnonKey, "Content-Type": "application/json" },
     body: JSON.stringify({ provider: "google", id_token: idToken, nonce })
   });
   const session = await response.json();
-  if (!response.ok || !session.access_token || !session.user?.id) throw new Error("Không thể tạo phiên Phrasebook");
+  if (!response.ok || !session.access_token || !session.user?.id) throw new Error("Could not create a Phrasebook session");
   const account = {
     userId: session.user.id, email: session.user.email, accessToken: session.access_token,
     refreshToken: session.refresh_token, expiresAt: Date.now() + (session.expires_in ?? 3600) * 1000,
@@ -139,7 +139,7 @@ async function signIn(input) {
   const verify = await fetch(`${config.appOrigin}/api/extension/session`, { headers: { Authorization: `Bearer ${account.accessToken}` } });
   if (!verify.ok) {
     await chrome.storage.local.remove("account");
-    throw new Error(verify.status === 403 ? "Tài khoản chưa được cấp quyền dùng Phrasebook" : "Không xác minh được tài khoản");
+    throw new Error(verify.status === 403 ? "This account does not have access to Phrasebook" : "Could not verify this account");
   }
   void syncQueue();
   return { email: account.email, userId: account.userId };
@@ -225,13 +225,13 @@ async function syncQueue() {
 }
 
 function validateAuthConfig(value) {
-  if (!value || typeof value !== "object") throw new Error("Cấu hình đăng nhập chưa đầy đủ");
+  if (!value || typeof value !== "object") throw new Error("Sign-in settings are incomplete");
   const appOrigin = validateAppOrigin(value.appOrigin ?? APP_ORIGIN_DEFAULT);
   const supabaseUrl = new URL(value.supabaseUrl);
-  if (!/^https?:$/.test(supabaseUrl.protocol) || (supabaseUrl.protocol !== "https:" && supabaseUrl.hostname !== "localhost")) throw new Error("Supabase URL không hợp lệ");
+  if (!/^https?:$/.test(supabaseUrl.protocol) || (supabaseUrl.protocol !== "https:" && supabaseUrl.hostname !== "localhost")) throw new Error("Invalid Supabase URL");
   const googleClientId = String(value.googleClientId ?? "").trim();
   const supabaseAnonKey = String(value.supabaseAnonKey ?? "").trim();
-  if (!googleClientId.endsWith(".apps.googleusercontent.com") || !supabaseAnonKey) throw new Error("Cần Google OAuth client ID và Supabase publishable key");
+  if (!googleClientId.endsWith(".apps.googleusercontent.com") || !supabaseAnonKey) throw new Error("A Google OAuth client ID and Supabase publishable key are required");
   return { appOrigin, supabaseUrl: supabaseUrl.origin, googleClientId, supabaseAnonKey };
 }
 
@@ -247,21 +247,21 @@ async function installDictionary(manifestUrl, modeInput) {
   const mode = normalizeMode(modeInput);
   const url = validateHttpsUrl(manifestUrl);
   const response = await fetch(url, { cache: "no-store", signal: AbortSignal.timeout(20_000) });
-  if (!response.ok) throw new Error(`Không tải được manifest (${response.status})`);
+  if (!response.ok) throw new Error(`Could not download the manifest (HTTP ${response.status})`);
   const manifest = await response.json();
-  if (manifest.schemaVersion !== 1 || !Array.isArray(manifest.packages)) throw new Error("Phiên bản manifest không được hỗ trợ");
+  if (manifest.schemaVersion !== 1 || !Array.isArray(manifest.packages)) throw new Error("Unsupported manifest version");
   const pack = manifest.packages.find((candidate) => candidate.direction === mode);
-  if (!pack || pack.packageId !== MODES[mode] || pack.contentType !== "application/x-ndjson+gzip") throw new Error("Gói từ điển cho chế độ này không hợp lệ");
+  if (!pack || pack.packageId !== MODES[mode] || pack.contentType !== "application/x-ndjson+gzip") throw new Error("Invalid dictionary package for this mode");
   const chunks = Array.isArray(pack.chunks) && pack.chunks.length ? pack.chunks : [pack];
   if (chunks.some((chunk) => typeof chunk.url !== "string" || !/^[a-f0-9]{64}$/.test(chunk.checksumSha256 ?? "") || !Number.isInteger(chunk.entryCount) || chunk.entryCount < 0 || chunk.entryCount > 5000 || !Number.isInteger(chunk.compressedBytes) || chunk.compressedBytes < 1 || chunk.compressedBytes > 8 * 1024 * 1024 || !Number.isInteger(chunk.uncompressedBytes) || chunk.uncompressedBytes < 1 || chunk.uncompressedBytes > 2 * 1024 * 1024)) {
-    throw new Error("Danh sách gói từ điển không hợp lệ");
+    throw new Error("Invalid dictionary chunk list");
   }
   const packageId = `${pack.packageId}@${pack.dataVersion}`;
-  if (!Number.isInteger(pack.entryCount) || chunks.reduce((total, chunk) => total + chunk.entryCount, 0) !== pack.entryCount) throw new Error("Số mục trong manifest không khớp");
+  if (!Number.isInteger(pack.entryCount) || chunks.reduce((total, chunk) => total + chunk.entryCount, 0) !== pack.entryCount) throw new Error("Manifest entry count mismatch");
   const fingerprintBytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(chunks)));
   const fingerprint = [...new Uint8Array(fingerprintBytes)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
   const existing = await getPackage(packageId);
-  if (existing?.fingerprint && existing.fingerprint !== fingerprint) throw new Error("Nội dung từ điển đã đổi nhưng chưa tăng phiên bản dữ liệu.");
+  if (existing?.fingerprint && existing.fingerprint !== fingerprint) throw new Error("Dictionary contents changed without a new data version.");
   if (existing?.state === "ready" && existing.active) {
     return { mode, dataVersion: pack.dataVersion, entryCount: pack.entryCount, compressedBytes: pack.compressedBytes, alreadyInstalled: true };
   }
@@ -281,7 +281,7 @@ async function installDictionary(manifestUrl, modeInput) {
       await transaction(["packages"], "readwrite", (tx) => tx.objectStore("packages").put(checkpoint()));
       await report("installing");
     }
-    if (installedEntries !== pack.entryCount) throw new Error("Số mục từ điển không khớp manifest");
+    if (installedEntries !== pack.entryCount) throw new Error("Dictionary entry count does not match the manifest");
     await transaction(["entries", "packages"], "readwrite", (tx) => {
       const packages = tx.objectStore("packages");
       const cursorRequest = packages.openCursor();
@@ -304,14 +304,14 @@ async function installDictionary(manifestUrl, modeInput) {
 
 async function installChunk(chunk, manifestUrl, packageId) {
   const chunkUrl = new URL(chunk.url, manifestUrl);
-  if (chunkUrl.origin !== new URL(manifestUrl).origin) throw new Error("Gói từ điển phải cùng domain với manifest");
+  if (chunkUrl.origin !== new URL(manifestUrl).origin) throw new Error("Dictionary chunks must use the same origin as the manifest");
   const response = await fetch(chunkUrl, { signal: AbortSignal.timeout(30_000) });
-  if (!response.ok) throw new Error(`Không tải được gói (${response.status})`);
+  if (!response.ok) throw new Error(`Could not download the chunk (HTTP ${response.status})`);
   const compressed = await readBoundedBody(response, 8 * 1024 * 1024);
-  if (chunk.compressedBytes && compressed.byteLength !== chunk.compressedBytes) throw new Error("Kích thước gói từ điển không khớp manifest");
+  if (chunk.compressedBytes && compressed.byteLength !== chunk.compressedBytes) throw new Error("Dictionary chunk size does not match the manifest");
   const digest = await crypto.subtle.digest("SHA-256", compressed);
   const checksum = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-  if (checksum !== chunk.checksumSha256) throw new Error("Checksum gói từ điển không khớp");
+  if (checksum !== chunk.checksumSha256) throw new Error("Dictionary checksum mismatch");
   const decompressed = new Blob([compressed]).stream().pipeThrough(new DecompressionStream("gzip"));
   const reader = decompressed.getReader();
   const decoder = new TextDecoder();
@@ -322,9 +322,9 @@ async function installChunk(chunk, manifestUrl, packageId) {
   while (true) {
     const { done, value } = await reader.read();
     uncompressedBytes += value?.byteLength ?? 0;
-    if (uncompressedBytes > chunk.uncompressedBytes) throw new Error("Gói từ điển lớn hơn manifest");
+    if (uncompressedBytes > chunk.uncompressedBytes) throw new Error("Dictionary exceeds the size declared in the manifest");
     pending += decoder.decode(value ?? new Uint8Array(), { stream: !done });
-    if (pending.length > 1_000_000) throw new Error("Dòng trong gói từ điển vượt giới hạn");
+    if (pending.length > 1_000_000) throw new Error("Dictionary entry exceeds the size limit");
     const lines = pending.split("\n");
     pending = lines.pop() ?? "";
     for (const line of lines) {
@@ -336,15 +336,15 @@ async function installChunk(chunk, manifestUrl, packageId) {
   }
   if (pending.trim()) { batch.push(readDictionaryLine(pending, packageId)); count += 1; }
   if (batch.length) await writeEntries(batch);
-  if (count !== chunk.entryCount || uncompressedBytes !== chunk.uncompressedBytes) throw new Error("Số mục hoặc kích thước giải nén không khớp manifest");
+  if (count !== chunk.entryCount || uncompressedBytes !== chunk.uncompressedBytes) throw new Error("Uncompressed size or entry count does not match the manifest");
   return checksum;
 }
 
 async function readBoundedBody(response, maxBytes) {
   const contentLength = response.headers.get("content-length");
   const declared = contentLength === null ? null : Number(contentLength);
-  if (declared !== null && Number.isFinite(declared) && declared > maxBytes) throw new Error("Gói từ điển vượt giới hạn kích thước");
-  if (!response.body) throw new Error("Gói từ điển không có nội dung");
+  if (declared !== null && Number.isFinite(declared) && declared > maxBytes) throw new Error("Dictionary chunk exceeds the size limit");
+  if (!response.body) throw new Error("Dictionary chunk has no content");
   const reader = response.body.getReader();
   const chunks = [];
   let size = 0;
@@ -352,10 +352,10 @@ async function readBoundedBody(response, maxBytes) {
     const { done, value } = await reader.read();
     if (done) break;
     size += value.byteLength;
-    if (size > maxBytes) { await reader.cancel(); throw new Error("Gói từ điển vượt giới hạn kích thước"); }
+    if (size > maxBytes) { await reader.cancel(); throw new Error("Dictionary chunk exceeds the size limit"); }
     chunks.push(value);
   }
-  if (declared !== null && Number.isFinite(declared) && declared !== size) throw new Error("Kích thước gói tải về không khớp");
+  if (declared !== null && Number.isFinite(declared) && declared !== size) throw new Error("Download size mismatch");
   const result = new Uint8Array(size);
   let offset = 0;
   for (const chunk of chunks) { result.set(chunk, offset); offset += chunk.byteLength; }
@@ -366,7 +366,7 @@ function readDictionaryLine(line, packageId) {
   const entry = JSON.parse(line);
   const language = packageId.startsWith("phrasebook-en-vi@") ? "vi" : "en";
   if (typeof entry.term !== "string" || entry.term.length > 120 || !Array.isArray(entry.senses) || entry.senses.length > 1000 || entry.senses.some((sense) => sense.glossLanguage && sense.glossLanguage !== language)) {
-    throw new Error("Dòng từ điển không hợp lệ");
+    throw new Error("Invalid dictionary entry");
   }
   return { packageId, term: entry.term, senses: entry.senses };
 }
@@ -380,12 +380,12 @@ async function writeEntries(entries) {
 
 function validateHttpsUrl(value) {
   const url = new URL(value);
-  if (url.protocol !== "https:" && url.hostname !== "localhost") throw new Error("Cần URL HTTPS cho manifest");
+  if (url.protocol !== "https:" && url.hostname !== "localhost") throw new Error("The manifest requires an HTTPS URL");
   return url.href;
 }
 
 function validateAppOrigin(value) {
   const url = new URL(value);
-  if (!/^https?:$/.test(url.protocol) || url.pathname !== "/" || url.search || url.hash) throw new Error("URL Phrasebook không hợp lệ");
+  if (!/^https?:$/.test(url.protocol) || url.pathname !== "/" || url.search || url.hash) throw new Error("Invalid Phrasebook URL");
   return url.origin;
 }

@@ -29,6 +29,7 @@
 <pre id="results" role="status">Ready</pre>
 <script>
   const calls = [];
+  let lookupDelay = 0, statusDelay = 0, saveDelay = 0;
   const playback = { paused:false, resumes:0 };
   const video = document.querySelector('video');
   Object.defineProperties(video, {
@@ -40,9 +41,12 @@
   window.chrome = {
     runtime: { sendMessage:async (request) => {
       calls.push(request);
+      const delay = request.type === 'lookup' ? lookupDelay : request.type === 'read-status' ? statusDelay : request.type === 'save-capture' ? saveDelay : 0;
+      if (delay) await new Promise(resolve => setTimeout(resolve, delay));
       if (request.type === 'get-config') return { ok:true, data:{ mode:'en-vi', appOrigin:'https://phrasebook.invalid' } };
       if (request.type === 'read-status') return { ok:true, data:{ state:'unknown', items:[] } };
       if (request.type === 'save-capture') return { ok:true, data:{ queued:true } };
+      if (request.type === 'enrich') return { ok:true, data:{ mode:request.mode, definitionLanguage:'vi', fields:{ examples:['This is a fixture example.'], ipa:'/test/' } } };
       if (request.type === 'lookup' && request.term === 'eco-friendly') return { ok:true, data:{ mode:request.mode, result:{ senses:[
         { id:'eco-friendly:adj:0', partOfSpeech:'adj', definitions:['thân thiện với môi trường'] }
       ] } } };
@@ -102,13 +106,15 @@
       check(document.elementFromPoint(point.clientX, point.clientY) === w, 'Caption words are above the player controls');
       const baseStyle = getComputedStyle(w);
       const originalStyle = { color:baseStyle.color, fontSize:baseStyle.fontSize, width:rect.width, height:rect.height };
+      fire(w, 'pointermove', point);
+      check(w.classList.contains('pbx-hover'), 'Direct caption hover responds in the same event without waiting for a frame');
       fire(document.querySelector('.ytp-chrome-bottom'), 'pointermove', point); await tick();
       check(w.classList.contains('pbx-hover'), 'Coordinate hover highlights the exact caption word');
       await Promise.all(w.getAnimations().map(animation => animation.finished));
-      check(getComputedStyle(w).backgroundColor === 'rgba(125, 211, 252, 0.16)', 'Hover uses a translucent blue background');
-      check(getComputedStyle(w).color === originalStyle.color && getComputedStyle(w).fontSize === originalStyle.fontSize, 'Hover preserves caption text color and size');
+      check(getComputedStyle(w).backgroundColor === 'rgba(56, 189, 248, 0.14)', 'Hover uses a translucent blue background');
+      check(getComputedStyle(w).color === 'rgb(125, 211, 252)' && getComputedStyle(w).fontSize === originalStyle.fontSize, 'Hover changes text to cyan without changing font size');
       check(w.getBoundingClientRect().width === originalStyle.width && w.getBoundingClientRect().height === originalStyle.height, 'Hover does not shift caption layout');
-      check(getComputedStyle(w).boxShadow.includes('inset'), 'Hover has a thin underline');
+      check(getComputedStyle(w).boxShadow === 'none', 'Color feedback replaces the underline');
       playback.paused = false;
       fire(w, 'click', point); await tick();
       check(playback.paused && shadow.querySelector('.pbx-definition'), 'Single click pauses video and shows basic definition');
@@ -125,7 +131,7 @@
       check(playback.paused && playback.resumes === resumes+1, 'A video already paused by the user stays paused');
       const title = document.querySelector('#page-copy');
       fire(title, 'mousedown'); selectWord(title, 10, 18); fire(title, 'mouseup', { detail:2 });
-      check(shadow.querySelector('.pbx-action')?.getAttribute('aria-label') === 'Tra từ unboxing', 'Selected YouTube page text offers Tra');
+      check(shadow.querySelector('.pbx-action')?.getAttribute('aria-label') === 'Look up unboxing', 'Selected YouTube page text offers Tra');
       shadow.querySelector('.pbx-action').click(); await tick();
       check(shadow.querySelector('.pbx-term')?.textContent === 'unboxing', 'Tra opens the selected text'); escape();
       fire(title, 'mousedown'); fire(title, 'mouseup', { detail:1 });
@@ -151,12 +157,12 @@
       check(!eco.classList.contains('pbx-active'), 'Closing the popup clears its active word mark');
       fire(eco, 'mousedown'); selectWord(eco, 0, 3); fire(eco, 'mouseup', { detail:2 });
       check(window.getSelection().toString() === 'eco-friendly', 'Double-click selection expands from eco to the entire compound');
-      check(shadow.querySelector('.pbx-action')?.getAttribute('aria-label') === 'Tra từ eco-friendly', 'Double-click offers Tra for the entire compound');
+      check(shadow.querySelector('.pbx-action')?.getAttribute('aria-label') === 'Look up eco-friendly', 'Double-click offers Tra for the entire compound');
       const nativeRange = document.createRange();
       nativeRange.setStart(eco.firstChild, 4); nativeRange.setEnd(eco.nextSibling, 1);
       fire(eco, 'mousedown'); window.getSelection().removeAllRanges(); window.getSelection().addRange(nativeRange);
       fire(eco, 'mouseup', { detail:2 });
-      check(window.getSelection().toString() === 'eco-friendly' && shadow.querySelector('.pbx-action')?.getAttribute('aria-label') === 'Tra từ eco-friendly', 'Native double-click with trailing whitespace still selects the whole compound');
+      check(window.getSelection().toString() === 'eco-friendly' && shadow.querySelector('.pbx-action')?.getAttribute('aria-label') === 'Look up eco-friendly', 'Native double-click with trailing whitespace still selects the whole compound');
       shadow.querySelector('.pbx-action').click(); await tick();
       check(shadow.querySelector('.pbx-term')?.textContent === 'eco-friendly' && eco.classList.contains('pbx-active'), 'Tra marks and opens the selected compound');
       escape(); window.getSelection().removeAllRanges();
@@ -172,6 +178,54 @@
       check(capture?.term === 'eco-friendly' && capture.queryTerm === 'eco‑friendly' && capture.context === tokenSample, 'Saving keeps a canonical compound and its original query/context');
       check(!calls.some(call => call.type === 'enrich'), 'Hover and compound lookup never invoke AI');
       escape(); segment.textContent = original; await tick();
+      // Regression from the user's recording: look up text under the player,
+      // then let loading and saved-status renders change the card beneath the pointer.
+      lookupDelay = 450; statusDelay = 150;
+      fire(title, 'mousedown'); selectWord(title, 10, 18); fire(title, 'mouseup', { detail:2 });
+      shadow.querySelector('.pbx-action').click();
+      fire(shadow.querySelector('.pbx-card'), 'pointerleave');
+      await new Promise(resolve => setTimeout(resolve, 700));
+      check(shadow.querySelector('.pbx-term')?.textContent === 'unboxing' && shadow.querySelector('.pbx-definition'), 'Lookup survives delayed data and layout-driven pointerleave');
+      check(shadow.querySelector('.pbx-close')?.getAttribute('aria-label') === 'Close' && [...shadow.querySelectorAll('button')].some(button => button.textContent === 'Fill with AI'), 'Lookup controls use English while dictionary definitions retain their language');
+      lookupDelay = 0; statusDelay = 0;
+      fire(document.body, 'pointermove', { clientX:innerWidth-2, clientY:2 });
+      // Replace the word before the old dismissal timeout can fire.
+      fire(word(), 'mousedown'); fire(word(), 'click'); await tick();
+      await new Promise(resolve => setTimeout(resolve, 350));
+      check(shadow.querySelector('.pbx-term')?.textContent === 'specifically', 'A pending dismissal cannot close a newly opened word');
+      const previousResumes = playback.resumes;
+      const company = segment.querySelector('[data-pbx-word="company"]');
+      fire(company, 'pointerdown'); fire(company, 'click'); await tick();
+      check(playback.paused && playback.resumes === previousResumes && shadow.querySelector('.pbx-term')?.textContent === 'company', 'Switching caption words preserves the pause without a play/pause flicker');
+      const stableCard = shadow.querySelector('.pbx-card');
+      let stableRect = stableCard.getBoundingClientRect();
+      const inCard = () => fire(stableCard, 'pointermove', { clientX:stableRect.left+20, clientY:stableRect.top+20 });
+      fire(document.body, 'pointermove', { clientX:innerWidth-2, clientY:2 });
+      inCard(); await new Promise(resolve => setTimeout(resolve, 350));
+      check(shadow.querySelector('.pbx-card') === stableCard, 'Entering the popup cancels a pending dismissal');
+      // Re-render on a sense change; no pointer movement means no auto-close.
+      const select = shadow.querySelector('.pbx-sense'); select.value = '1'; select.dispatchEvent(new Event('change'));
+      fire(stableCard, 'pointerleave'); await new Promise(resolve => setTimeout(resolve, 350));
+      check(shadow.querySelector('.pbx-card') === stableCard, 'Changing meanings does not make the popup disappear');
+      const expand = [...shadow.querySelectorAll('button')].find(button => button.textContent === 'Expand'); expand.click();
+      fire(document.body, 'pointermove', { clientX:innerWidth-2, clientY:2 }); await new Promise(resolve => setTimeout(resolve, 350));
+      check(shadow.querySelector('.pbx-card')?.dataset.expanded === 'true', 'Expanded details stay open after moving away');
+      [...shadow.querySelectorAll('button')].find(button => button.textContent === 'Collapse').click();
+      stableRect = stableCard.getBoundingClientRect(); inCard();
+      statusDelay = 150;
+      const savingSense = shadow.querySelector('.pbx-sense'); savingSense.value = '0'; savingSense.dispatchEvent(new Event('change'));
+      saveDelay = 450; const savingButton = shadow.querySelector('.pbx-primary'); savingButton.click();
+      fire(document.body, 'pointermove', { clientX:innerWidth-2, clientY:2 }); await new Promise(resolve => setTimeout(resolve, 200));
+      check(shadow.querySelector('.pbx-primary') === savingButton && savingButton.disabled, 'A late saved-status response cannot replace controls during Save');
+      await new Promise(resolve => setTimeout(resolve, 300));
+      check(shadow.querySelector('.pbx-card') && shadow.querySelector('.pbx-primary')?.textContent === 'Saved', 'A pending local save keeps the popup open and reports success in English');
+      saveDelay = 0; statusDelay = 0;
+      [...shadow.querySelectorAll('button')].find(button => button.textContent === 'Fill with AI').click(); await tick();
+      check(calls.filter(call => call.type === 'enrich').at(-1)?.fields.every(field => ['definitions','ipa','examples','synonyms','antonyms','collocations'].includes(field)), 'English missing-field labels preserve the AI request schema');
+      // A continuing stream of movement outside must not perpetually restart the close timer.
+      for (let i=0;i<8;i++) { fire(document.body, 'pointermove', { clientX:innerWidth-2, clientY:2 }); await new Promise(resolve => setTimeout(resolve, 50)); }
+      check(!shadow.querySelector('.pbx-card'), 'The popup closes after actually leaving both the word and popup');
+      window.getSelection().removeAllRanges();
       if (!document.fullscreenElement) {
         // Exercise the lifecycle handler even when browser automation lacks a
         // user activation for real fullscreen. This does not test fullscreen rendering.

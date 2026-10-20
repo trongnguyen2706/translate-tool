@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "Phrasebook — tra từ trên video và web",
-  "description": "Tra nghĩa trong từ điển đã tải, lưu từ kèm ngữ cảnh vào Phrasebook.",
+  "name": "Phrasebook — video and web dictionary",
+  "description": "Look up words in downloaded dictionaries and save them with context to Phrasebook.",
   "version": "0.1.0",
   "permissions": ["storage", "identity", "alarms"],
   "host_permissions": [
