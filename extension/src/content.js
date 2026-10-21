@@ -32,6 +32,13 @@
     .pbx-example { margin:11px 0 0; padding:9px 10px; border-left:3px solid #93c5fd; background:#f8fafc; color:#475569; font-size:12px; }
     .pbx-missing { margin:10px 0 0; color:#64748b; font-size:12px; }
     .pbx-sense { width:100%; margin:0 0 10px; padding:7px 9px; border:1px solid #cbd5e1; border-radius:7px; background:white; color:#172554; font:13px system-ui,sans-serif; }
+    .pbx-choices { max-height:190px; overflow-y:auto; overflow-x:hidden; margin:0 0 12px; padding:3px; border:1px solid #dbe3ef; border-radius:8px; }
+    .pbx-choice { display:block; width:100%; margin:0; padding:9px; border:0; border-bottom:1px solid #eef2f7; background:#fff; color:#172554; text-align:left; white-space:normal; overflow-wrap:anywhere; font:13px/1.45 system-ui,sans-serif; cursor:pointer; }
+    .pbx-choice[aria-pressed=true] { background:#eff6ff; box-shadow:inset 3px 0 #2563eb; }
+    .pbx-choice:hover,.pbx-choice:focus-visible { background:#f1f5f9; }
+    .pbx-choice small { display:block; margin-bottom:3px; color:#64748b; font-size:11px; }
+    .pbx-choice-text { display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+    .pbx-source { margin:0 0 5px; color:#64748b; font-size:11px; }
     .pbx-detail { border-top:1px solid #eef2f7; padding:12px 16px; }
     .pbx-detail h3 { margin:12px 0 4px; color:#2563eb; font-size:11px; letter-spacing:.07em; text-transform:uppercase; }
     .pbx-detail p,.pbx-detail ul { margin:4px 0; }
@@ -427,30 +434,46 @@
       content.append(ai);
     } else {
       if (senses.length > 1) {
-        const select = document.createElement("select"); select.className = "pbx-sense"; select.setAttribute("aria-label", "Choose a meaning");
-        select.disabled = Boolean(active.enriching);
-        senses.forEach((item, index) => {
-          const option = document.createElement("option"); option.value = String(index);
-          option.textContent = `${item.partOfSpeech ? `${item.partOfSpeech}: ` : ""}${item.definitions?.[0] ?? "Base meaning unavailable"}`;
-          select.append(option);
-        });
-        select.value = String(Math.max(0, senses.indexOf(sense)));
-        select.addEventListener("change", () => {
-          active.selectedSense = senses[Number(select.value)];
+        const choose = (item) => {
+          active.selectedSense = item;
+          active.meaningPickerOpen = false;
           active.confirmedItemId = null;
           active.enrichmentStatus = "";
           active.enrichmentError = false;
           renderResult(lookup, { state: "checking", items: [] });
+          state.popup.querySelector('[aria-label="Choose a meaning"]')?.focus({ preventScroll: true });
           const savedTerm = mode === "vi-en" && active.selectedSense?.sourceTerm ? active.selectedSense.sourceTerm : active.term;
           const sequence = state.sequence;
           void send("read-status", { term: savedTerm, mode }).then((response) => {
             if (sequence === state.sequence && active === state.activeWord && state.popup && response.ok) renderResult(active.lookup ?? lookup, response.data);
           });
-        });
-        content.append(select);
+        };
+        const toggle = makeButton(active.meaningPickerOpen ? "Close meanings" : "Other meanings", "pbx-btn pbx-sense", () => {
+          cancelClose(); active.meaningPickerOpen = !active.meaningPickerOpen; renderResult(lookup, saved);
+          state.popup.querySelector(active.meaningPickerOpen ? ".pbx-choice" : '[aria-label="Choose a meaning"]')?.focus({ preventScroll: true });
+        }, Boolean(active.enriching));
+        toggle.setAttribute("aria-label", "Choose a meaning"); toggle.setAttribute("aria-expanded", String(Boolean(active.meaningPickerOpen)));
+        content.append(toggle);
+        if (active.meaningPickerOpen) {
+          const choices = document.createElement("div"); choices.className = "pbx-choices"; choices.setAttribute("role", "group"); choices.setAttribute("aria-label", "Dictionary meanings");
+          const initialCount = Math.max(1, Math.min(3, result.basicSenseCount ?? 3));
+          const visible = active.showAllMeanings ? senses : senses.slice(0, initialCount);
+          for (const item of visible) {
+            const button = makeButton("", "pbx-choice", () => choose(item), Boolean(active.enriching));
+            button.dataset.senseIndex = String(senses.indexOf(item)); button.setAttribute("aria-pressed", String(item === sense));
+            const label = document.createElement("small"); label.textContent = [item.partOfSpeech, item.learner ? "Simple English" : "Dictionary", ...(item.usageLabels ?? []).slice(0, 2)].filter(Boolean).join(" · ");
+            const text = document.createElement("span"); text.className = "pbx-choice-text"; text.textContent = item.definitions?.[0] ?? "Base meaning unavailable";
+            button.append(label, text); choices.append(button);
+          }
+          if (senses.length > initialCount) choices.append(makeButton(active.showAllMeanings ? "Show fewer meanings" : `More dictionary meanings (${senses.length - initialCount})`, "pbx-choice", () => {
+            active.showAllMeanings = !active.showAllMeanings; renderResult(lookup, saved);
+          }));
+          content.append(choices);
+        }
       }
       if (sense?.formNote) { const form = document.createElement("p"); form.className = "pbx-form"; form.textContent = sense.formNote; content.append(form); }
       const definition = document.createElement("p"); definition.className = "pbx-definition";
+      if (sense?.learner) { const source = document.createElement("p"); source.className = "pbx-source"; source.textContent = "Simple English definition"; content.append(source); }
       definition.textContent = sense?.definitions?.[0] ?? (sense?.formStatus === "unresolved" ? `The meaning of ${sense.baseForm} is not available in this dictionary. You can fill it with AI.` : "No definition available");
       content.append(definition);
       if (sense?.examples?.[0]) { const example = document.createElement("p"); example.className = "pbx-example";
@@ -623,13 +646,13 @@
   }
   function scheduleClose() {
     const active = state.activeWord;
-    if (!active || active.loading || active.enriching || active.saving || active.expanded) return;
+    if (!active || active.loading || active.enriching || active.saving || active.expanded || active.meaningPickerOpen) return;
     if (state.pointerVersion <= active.openedPointerVersion || pointerOverLookup(state.pointer)) return;
     // Do not restart this timer on every move: a continuous move away should close promptly.
     if (state.closeTimer) return;
     state.closeTimer = setTimeout(() => {
       state.closeTimer = 0;
-      if (active === state.activeWord && !active.loading && !active.enriching && !active.saving && !active.expanded && !pointerOverLookup(state.pointer)) closePopup();
+      if (active === state.activeWord && !active.loading && !active.enriching && !active.saving && !active.expanded && !active.meaningPickerOpen && !pointerOverLookup(state.pointer)) closePopup();
     }, 300);
   }
 

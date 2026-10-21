@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { getMissingFields, lookupFromIndex, normalizeLookupTerm, normalizeMode, resolveWordForms } from "../extension/src/dictionary-core.mjs";
+import { getMissingFields, lookupFromIndex, normalizeLookupTerm, normalizeMode, resolveWordForms, rankDictionarySenses } from "../extension/src/dictionary-core.mjs";
 
 test("lookup keeps acronyms separate from lowercase words", () => {
   assert.equal(normalizeLookupTerm("US"), "US");
@@ -99,4 +99,23 @@ test("missing bases, cycles, chains and ambiguous bases are bounded and never gu
   assert.deepEqual(await resolveWordForms("cup", [ordinary], () => { throw new Error("Must not guess"); }, "en-en", "v2"), [ordinary]);
   const wrongPos = await resolveWordForms("went", [{ partOfSpeech: "verb", definitions: ["past tense of go"] }], () => [{ partOfSpeech: "noun", definitions: ["a turn in a game"] }], "en-en", "v2");
   assert.equal(wrongPos[0].formStatus, "unresolved");
+});
+
+test("weaker puts learner strength meanings ahead of slang/logic and removes repeated meanings", async () => {
+  const senses = [
+    {id:"slang",partOfSpeech:"adj",definitions:["Bad or uncool."]},
+    {id:"logic",partOfSpeech:"adj",definitions:["Said of one proposition with respect to another."],usageLabels:["logic"]},
+    {id:"strength-full",partOfSpeech:"adj",definitions:["Lacking in force (usually strength) or ability."],senseRank:0},
+    {id:"strength-simple",partOfSpeech:"adj",definitions:["Weak is used to describe something that does not have a lot of strength."],learner:true,senseRank:0},
+    {id:"taste",partOfSpeech:"adj",definitions:["Something that is weak does not have a strong taste."],learner:true,senseRank:1},
+    {id:"strength-copy",partOfSpeech:"adj",definitions:["Weak is used to describe something that does not have a lot of strength."],learner:true,senseRank:0}
+  ];
+  const form = {id:"weaker",partOfSpeech:"adj",definitions:["comparative degree of weak"],formOf:"weak",formTags:["form-of","comparative"]};
+  const result = await resolveWordForms("weaker",[form],()=>senses,"en-en","learners");
+  assert.equal(result[0].learner,true);
+  assert.match(result[0].definitions[0],/strength/);
+  assert.match(result[1].definitions[0],/taste/);
+  assert.equal(result.filter(sense=>sense.definitions[0]===senses[3].definitions[0]).length,1);
+  assert.equal(lookupFromIndex({weaker:result},"weaker").basicSenseCount,2);
+  assert.equal(rankDictionarySenses(senses).at(-1).id,"logic");
 });

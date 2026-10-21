@@ -100,3 +100,23 @@ Mốc code local: commit `e4cb3f0` (`feat: add Chrome dictionary extension found
   checks. No paid AI requests, R2 upload or Chrome Store submission.
 - Activation: `docs/extension/WORD_FORMS.md`; existing migrations 001–008 are
   still prerequisites for the web writer APIs.
+
+## 2026-10-21 — readable learner meanings (extension 0.2.2)
+
+- Fixed the oversized native meaning dropdown: one definition initially, up to
+  three learner/everyday choices under Other meanings, and a bounded scrolling
+  panel for the remaining dictionary meanings. Choices wrap instead of expanding
+  across the browser. Meaning selection supports keyboard focus.
+- Added the Simple English Wiktionary source to English–English. Preserved sense
+  order, usage/domain labels and base-form links; prioritize learner meanings,
+  lower specialist/slang entries and deduplicate repeated definitions. Exclude
+  fixed-expression explanations such as "excuse me" from inflected verb lookup.
+- Rebuilt local data as `2026.10.21.2-learners`. The actual weaker lookup now
+  starts with the learner explanation about strength, not slang or logic.
+- Validation: 17 Node extension tests, 8 Python dictionary tests, 11 full-data
+  word/mode checks, 68 browser fixture checks and lint; extension build/package.
+  No web/database schema change or paid AI request. Live installed YouTube
+  verification still requires reloading the extension and tabs.
+- Reload 0.2.2, refresh tabs, and update the English–English dictionary for the
+  simpler source text. This is local dictionary ranking, not automatic context
+  disambiguation. Existing saved vocabulary/progress is not rewritten.

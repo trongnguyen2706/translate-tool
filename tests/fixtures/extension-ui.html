@@ -23,7 +23,7 @@
   <video class="html5-main-video"></video>
   <div class="ytp-caption-window-container"><div class="caption-window"><span class="ytp-caption-segment">An eco-friendly company specifically for you</span></div></div>
   <div class="ytp-chrome-bottom"></div>
-  <div class="fixture-toolbar"><button id="fullscreen">Enter fullscreen</button> <button id="run">Run interaction checks</button> <button id="preview">Preview hover</button> <button id="preview-form">Preview word forms</button> <span id="screen-state">Normal view</span></div>
+  <div class="fixture-toolbar"><button id="fullscreen">Enter fullscreen</button> <button id="run">Run interaction checks</button> <button id="preview">Preview hover</button> <button id="preview-form">Preview word forms</button> <button id="preview-learner">Preview learner meaning</button> <span id="screen-state">Normal view</span></div>
 </div>
 <h2 id="page-copy">Aesthetic unboxing and review</h2>
 <pre id="results" role="status">Ready</pre>
@@ -48,6 +48,11 @@
       if (request.type === 'read-status') return { ok:true, data:{ state:'unknown', items:statusItems } };
       if (request.type === 'save-capture') return { ok:true, data:{ queued:true } };
       if (request.type === 'enrich') return { ok:true, data:{ mode:request.mode, definitionLanguage:'vi', fields:{ examples:['This is a fixture example.'], ipa:'/test/' } } };
+      if (request.type === 'lookup' && request.term === 'weaker') return {ok:true,data:{mode:'en-en',dataVersion:'learner-fixture',result:{basicSenseCount:2,senses:[
+        {id:'weak-strength',partOfSpeech:'adj',learner:true,baseForm:'weak',formNote:'Comparative of weak (used to compare)',definitions:['Weak is used to describe something that does not have a lot of strength.']},
+        {id:'weak-taste',partOfSpeech:'adj',learner:true,baseForm:'weak',definitions:['Something that is weak does not have a strong taste.']},
+        ...Array.from({length:24},(_,i)=>({id:'special-'+i,partOfSpeech:'adj',usageLabels:['logic'],definitions:['Specialist dictionary meaning '+i+': '+('A detailed explanation about formal logic. ').repeat(8)]}))
+      ]}}};
       if (request.type === 'lookup' && request.term === 'excuses') return { ok:true, data:{ mode:'en-en', dataVersion:'forms-pack', result:{ senses:[
         { id:'form:noun', partOfSpeech:'noun', baseForm:'excuse', formNote:'Plural of excuse', formStatus:'resolved', formDefinitions:['plural of excuse'], definitions:['A reason given to explain a mistake.'], examples:['That is a poor excuse.'], examplesFromBase:true },
         { id:'form:verb', partOfSpeech:'verb', baseForm:'excuse', formNote:'Present form of excuse (he/she/it)', formStatus:'resolved', definitions:['To forgive someone.'] }
@@ -73,6 +78,10 @@
   const escape = () => document.dispatchEvent(new KeyboardEvent('keydown', { key:'Escape', bubbles:true }));
   const word = () => document.querySelector('[data-pbx-word="specifically"]');
   const lookupCount = () => calls.filter(call => call.type === 'lookup').length;
+  const chooseSense = (index) => {
+    if (!shadow.querySelector('.pbx-choice[data-sense-index]')) shadow.querySelector('[aria-label="Choose a meaning"]').click();
+    shadow.querySelector(`[data-sense-index="${index}"]`).click();
+  };
   document.querySelector('#preview').onclick = () => {
     escape(); window.getSelection().removeAllRanges();
     const target = document.querySelector('[data-pbx-word="eco-friendly"]');
@@ -83,6 +92,11 @@
     escape(); window.getSelection().removeAllRanges(); statusItems = [];
     document.querySelector('.ytp-caption-segment').textContent = 'She makes excuses'; await tick();
     fire(document.querySelector('[data-pbx-word="excuses"]'), 'click');
+  };
+  document.querySelector('#preview-learner').onclick = async () => {
+    escape(); window.getSelection().removeAllRanges(); statusItems = [];
+    document.querySelector('.ytp-caption-segment').textContent = 'The signal gets weaker'; await tick();
+    fire(document.querySelector('[data-pbx-word="weaker"]'), 'click');
   };
   const selectWord = (node, start, end) => {
     const selection = window.getSelection();
@@ -215,7 +229,7 @@
       inCard(); await new Promise(resolve => setTimeout(resolve, 350));
       check(shadow.querySelector('.pbx-card') === stableCard, 'Entering the popup cancels a pending dismissal');
       // Re-render on a sense change; no pointer movement means no auto-close.
-      const select = shadow.querySelector('.pbx-sense'); select.value = '1'; select.dispatchEvent(new Event('change'));
+      chooseSense(1);
       fire(stableCard, 'pointerleave'); await new Promise(resolve => setTimeout(resolve, 350));
       check(shadow.querySelector('.pbx-card') === stableCard, 'Changing meanings does not make the popup disappear');
       const expand = [...shadow.querySelectorAll('button')].find(button => button.textContent === 'Expand'); expand.click();
@@ -224,7 +238,7 @@
       [...shadow.querySelectorAll('button')].find(button => button.textContent === 'Collapse').click();
       stableRect = stableCard.getBoundingClientRect(); inCard();
       statusDelay = 150;
-      const savingSense = shadow.querySelector('.pbx-sense'); savingSense.value = '0'; savingSense.dispatchEvent(new Event('change'));
+      chooseSense(0);
       saveDelay = 450; const savingButton = shadow.querySelector('.pbx-primary'); savingButton.click();
       fire(document.body, 'pointermove', { clientX:innerWidth-2, clientY:2 }); await new Promise(resolve => setTimeout(resolve, 200));
       check(shadow.querySelector('.pbx-primary') === savingButton && savingButton.disabled, 'A late saved-status response cannot replace controls during Save');
@@ -271,15 +285,26 @@
       check(shadow.querySelector('.pbx-definition')?.textContent === 'A reason given to explain a mistake.', 'Inflected words show a real base meaning in the small popup');
       check(shadow.querySelector('.pbx-form')?.textContent === 'Plural of excuse', 'Word form is a separate readable note');
       check(shadow.querySelector('.pbx-example-label')?.textContent === 'Example with excuse', 'Base-word examples are clearly labeled');
-      const formSelect = shadow.querySelector('[aria-label="Choose a meaning"]');
-      check(formSelect.options[1].textContent === 'verb: To forgive someone.', 'Meaning choices contain actual definitions instead of grammar references');
-      formSelect.value = '1'; formSelect.dispatchEvent(new Event('change')); await tick();
+      shadow.querySelector('[aria-label="Choose a meaning"]').click();
+      check(shadow.querySelector('[data-sense-index="1"]').textContent.includes('To forgive someone.'), 'Meaning choices contain actual definitions instead of grammar references');
+      chooseSense(1); await tick();
       check(shadow.querySelector('.pbx-definition').textContent === 'To forgive someone.' && shadow.querySelector('.pbx-form').textContent.includes('he/she/it'), 'Changing part of speech updates both meaning and grammar note');
       [...shadow.querySelectorAll('button')].find(button=>button.textContent==='Expand').click();
       check(shadow.querySelector('.pbx-detail').textContent.includes('Base word') && shadow.querySelector('.pbx-detail').textContent.includes('excuse'), 'Expanded details include the base word');
       shadow.querySelector('.pbx-primary').click(); await tick();
       const formCapture = calls.filter(call=>call.type==='save-capture').at(-1).capture;
       check(formCapture.term === 'excuses' && formCapture.selectedSense.baseForm === 'excuse' && formCapture.selectedSense.definitions[0] === 'To forgive someone.', 'Saving retains the clicked word, selected base sense and relationship');
+      escape(); segment.textContent = 'The signal gets weaker'; await tick();
+      fire(segment.querySelector('[data-pbx-word="weaker"]'),'click'); await tick();
+      check(shadow.querySelector('.pbx-definition').textContent.includes('strength') && shadow.querySelector('.pbx-source').textContent === 'Simple English definition','Weaker starts with a learner definition instead of slang or technical logic');
+      check(!shadow.querySelector('.pbx-choices') && !shadow.querySelector('select[aria-label="Choose a meaning"]'),'A large dictionary entry does not open an enormous native dropdown');
+      shadow.querySelector('[aria-label="Choose a meaning"]').click();
+      check(shadow.querySelectorAll('[data-sense-index]').length === 2,'Only the two learner choices appear initially; technical meanings stay behind More');
+      [...shadow.querySelectorAll('.pbx-choice')].find(button=>button.textContent.startsWith('More dictionary meanings')).click();
+      const choiceBounds = shadow.querySelector('.pbx-choices').getBoundingClientRect();
+      check(shadow.querySelectorAll('[data-sense-index]').length===26 && choiceBounds.height<=191 && choiceBounds.width<=shadow.querySelector('.pbx-card').getBoundingClientRect().width,'All meanings stay in a bounded scrolling panel inside the card');
+      chooseSense(1); await tick();
+      check(shadow.querySelector('.pbx-definition').textContent.includes('taste'),'Choosing another learner meaning updates the main definition');
       escape(); segment.textContent = 'An eco-friendly company specifically for you'; await tick();
       document.querySelector('#results').textContent = `${results.join('\n')}\n${results.length}/${results.length} checks passed (${document.fullscreenElement ? 'fullscreen' : 'normal'})`;
       document.querySelector('#screen-state').textContent += ` — ${results.length} checks passed`;

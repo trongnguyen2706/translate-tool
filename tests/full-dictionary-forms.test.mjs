@@ -6,9 +6,9 @@ import path from "node:path";
 import { gunzipSync } from "node:zlib";
 import { resolveWordForms } from "../extension/src/dictionary-core.mjs";
 
-const manifestPath = path.resolve(process.argv[2] ?? "artifacts/dictionaries-forms/manifest.json");
+const manifestPath = path.resolve(process.argv[2] ?? "artifacts/dictionaries-learners/manifest.json");
 const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
-const wanted = new Set(["excuse", "excuses", "go", "went", "child", "children", "run", "running", "restructure", "restructured"]);
+const wanted = new Set(["excuse", "excuses", "go", "went", "child", "children", "run", "running", "restructure", "restructured", "weak", "weaker"]);
 const report = [];
 for (const pack of manifest.packages.filter((pack) => pack.direction !== "vi-en")) {
   const index = {};
@@ -19,6 +19,14 @@ for (const pack of manifest.packages.filter((pack) => pack.direction !== "vi-en"
       const term = /^\{"term":"([^"]+)"/.exec(line)?.[1];
       if (wanted.has(term)) index[term] = JSON.parse(line).senses;
     }
+  }
+  if (pack.direction === "en-en" && manifest.dataVersion.includes("learners")) {
+    assert.ok(index.weak?.some(s=>s.learner), "learner edition must be included in this pack");
+    const weaker = await resolveWordForms("weaker",index.weaker,(base)=>index[base],pack.direction,pack.dataVersion);
+    assert.equal(weaker[0].learner,true);
+    assert.match(weaker[0].definitions[0],/strength/);
+    assert.ok(!/uncool|proposition|entails/i.test(weaker[0].definitions[0]));
+    report.push({mode:pack.direction,term:"weaker",first:weaker[0].definitions[0],learner:true});
   }
   for (const term of ["excuses", "went", "children", "running", "restructured"]) {
     assert.ok(index[term]?.length, `${pack.direction}: missing ${term}`);

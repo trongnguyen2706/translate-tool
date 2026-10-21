@@ -2,7 +2,7 @@
 
 Audio pronunciation is excluded. IPA remains text metadata. AI balance/budget UI remains excluded at the user's request.
 
-For extension 0.2.1, see [word-form activation](WORD_FORMS.md). Its optional JSON
+For extension 0.2.2, see [word-form and learner-meaning activation](WORD_FORMS.md). Its optional JSON
 metadata uses the existing schema; no migration beyond 001–008 is introduced.
 
 ## Apply backend changes

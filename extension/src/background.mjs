@@ -1,4 +1,4 @@
-import { lookupFromIndex, normalizeLookupTerm, normalizeMode, resolveWordForms, describeWordForm } from "./dictionary-core.mjs";
+import { lookupFromIndex, normalizeLookupTerm, normalizeMode, resolveWordForms, describeWordForm, rankDictionarySenses } from "./dictionary-core.mjs";
 import { getActivePackage, getPackage, getEntry, listQueue, listPackages, openDatabase, putQueueItem, transaction, readRecord, rememberSense, removeDictionary } from "./storage.mjs";
 import { requestJson } from "./network.mjs";
 
@@ -134,7 +134,7 @@ async function lookup(term, requestedMode, includePersonal = true) {
       const unique = new Map(notes.filter(Boolean).map((note) => [JSON.stringify(note), note]));
       if (notes.length && notes.every(Boolean) && unique.size === 1) Object.assign(sense, [...unique.values()][0]);
     }
-    return { mode, result: lookupFromIndex({ [normalized]: resolved }, normalized), source: personal ? "personal+dictionary" : "dictionary", dataVersion: pack.dataVersion };
+    return { mode, result: lookupFromIndex({ [normalized]: rankDictionarySenses(resolved) }, normalized), source: personal ? "personal+dictionary" : "dictionary", dataVersion: pack.dataVersion };
   }
   return { mode, result: null, source: "dictionary", dataVersion: pack.dataVersion };
 }

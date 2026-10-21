@@ -1,4 +1,15 @@
-# Word forms in extension 0.2.1
+# Word forms and learner meanings in extension 0.2.2
+
+Version 0.2.2 prioritizes definitions from the Simple English Wiktionary edition,
+preserves sense order within each source entry, and moves slang, dated and specialist
+meanings lower. Identical meanings are deduplicated. This is local ordering,
+not automatic selection of the correct sense from the video sentence.
+
+The small popup shows one definition. **Other meanings** opens up to three
+learner/everyday choices inside the card; **More dictionary meanings** reveals
+the remaining entries in a scrolling panel. Native unbounded meaning dropdowns
+are no longer used. Simple English coverage varies by word; the full dictionary
+remains available as the fallback. This does not invoke AI.
 
 The popup shows the actual meaning of the base word for explicit plural, tense,
 participle and comparative references. The clicked form remains the saved word.
@@ -15,7 +26,7 @@ never copied from the base word.
 3. Refresh YouTube and other open website/Phrasebook tabs.
 4. Keep the dictionary manifest URL as
    `http://localhost:3000/dictionaries/manifest.json`. The local manifest now
-   points to `2026.10.21.1-forms`. In the toolbar choose **Download / update all
+   points to `2026.10.21.2-learners`. In the toolbar choose **Download / update all
    dictionaries**, or select one mode and **Download this dictionary**. Keep
    the popup open until installation finishes. Existing packs remain active
    until their replacement is fully verified.
@@ -29,9 +40,10 @@ never copied from the base word.
 
 Legacy packs work with recognized explicit English and Vietnamese grammar
 notes, so common cases improve immediately after reloading the extension.
-The rebuilt packs also retain upstream `form_of` links and grammar tags for
-entries whose wording is not recognized. All three packs total 131,033,528
-compressed bytes; the English–English pack accounts for 119,916,722 bytes.
+The rebuilt packs also retain upstream `form_of` links, source order and usage
+labels. To get the new simpler English definitions after updating the extension,
+select English–English and download/update that dictionary. The other modes do
+not need a new download just to use the compact meaning picker.
 
 Missing base entries show an explanation and the manual **Fill with AI** action.
 AI is never called by local form resolution. The dictionary still uses its
@@ -41,9 +53,9 @@ is instructed to supply an actual meaning in simple words.
 ## Build and verify
 
 ```powershell
-python scripts/build_dictionaries.py --english artifacts/dictionary-sources/english-full.jsonl.gz --vietnamese artifacts/dictionary-sources/vi-extract.jsonl.gz --vietnamese-english artifacts/dictionary-sources/vietnamese-english-full.jsonl.gz --out artifacts/dictionaries-forms --data-version 2026.10.21.1-forms --progress
+python scripts/build_dictionaries.py --english artifacts/dictionary-sources/english-full.jsonl.gz --vietnamese artifacts/dictionary-sources/vi-extract.jsonl.gz --vietnamese-english artifacts/dictionary-sources/vietnamese-english-full.jsonl.gz --learner-english artifacts/dictionary-sources/simple-extract.jsonl.gz --out artifacts/dictionaries-learners --data-version 2026.10.21.2-learners --progress
 node tests/full-dictionary-forms.test.mjs
-python scripts/publish_local_dictionaries.py --source artifacts/dictionaries-forms --public public/dictionaries
+python scripts/publish_local_dictionaries.py --source artifacts/dictionaries-learners --public public/dictionaries
 npm run package:extension
 ```
 

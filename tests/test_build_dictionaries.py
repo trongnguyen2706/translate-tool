@@ -12,6 +12,22 @@ SPEC.loader.exec_module(builder)
 
 
 class DictionaryBuildTests(unittest.TestCase):
+    def test_learner_source_keeps_source_order_labels_and_form_links(self):
+        fixtures = Path(__file__).parent / "fixtures"
+        database = builder.build_staging_database(fixtures / "dictionary-english.jsonl", fixtures / "dictionary-vietnamese.jsonl", ":memory:")
+        try:
+            builder.add_learner_english(database, fixtures / "dictionary-learner.jsonl")
+            senses = [json.loads(row[0]) for row in database.execute("SELECT payload FROM senses WHERE direction='en-en' AND term='weak'")]
+            ordered = sorted(senses, key=lambda sense: sense["senseRank"])
+            self.assertEqual(ordered[0]["id"], "simple:z-strength")
+            self.assertTrue(ordered[0]["learner"])
+            self.assertIn("informal", ordered[2]["usageLabels"])
+            form = json.loads(database.execute("SELECT payload FROM senses WHERE term='weaker'").fetchone()[0])
+            self.assertEqual(form["formOf"], "weak")
+            self.assertEqual(form["formTags"], ["form-of", "comparative"])
+        finally:
+            database.close()
+
     def test_preserves_irregular_base_links_and_bounded_grammar_tags(self):
         senses = builder.senses_for({"word": "went", "pos": "verb", "senses": [{
             "glosses": ["past tense of go"], "form_of": [{"word": "go"}, {"word": "go"}],

@@ -22,7 +22,7 @@ from typing import Any, Iterable
 
 
 SCHEMA_VERSION = 1
-DATA_VERSION = "2026.10.21.1-forms"
+DATA_VERSION = "2026.10.21.2-learners"
 MAX_TERM_LENGTH = 100
 MAX_DEFINITION_LENGTH = 500
 WORD_RE = re.compile(r"^[\w][\w'’ -]*$", re.UNICODE)
@@ -86,7 +86,12 @@ def senses_for(entry: dict[str, Any], gloss_language: str) -> list[dict[str, Any
             "definitions": glosses[:6],
             "examples": examples,
             "glossLanguage": gloss_language,
+            "senseRank": index,
         })
+        labels = [label for label in [*sense.get("tags", []), *sense.get("raw_tags", []), *sense.get("topics", [])]
+                  if isinstance(label, str) and len(label) <= 60 and label not in ("form-of", "countable", "uncountable", "transitive", "intransitive")]
+        if labels:
+            output[-1]["usageLabels"] = list(dict.fromkeys(labels))[:12]
         # Keep the upstream relationship; runtime lookup follows it in the same
         # language pack instead of guessing a stem by removing word endings.
         bases = list(dict.fromkeys(
@@ -107,6 +112,30 @@ def senses_for(entry: dict[str, Any], gloss_language: str) -> list[dict[str, Any
             if related:
                 output[-1][field] = related[:6 if field == "collocations" else 12]
     return output
+
+
+def add_learner_english(database: sqlite3.Connection, path: Path) -> None:
+    # A separate source edition, not an automatic rewrite of the full entry.
+    patterns = {"plural form": ["plural"], "past tense": ["past"], "present participle": ["present", "participle"],
+                "past participle": ["past", "participle"], "comparative form": ["comparative"],
+                "superlative form": ["superlative"], "third-person singular form": ["third-person", "present"]}
+    for entry in read_jsonl(path):
+        term = candidate_term(entry.get("word"))
+        if not term or entry.get("lang_code") != "en":
+            continue
+        for sense in senses_for(entry, "en"):
+            sense["id"] = f"simple:{sense['id']}"
+            sense["learner"] = True
+            for description, tags in patterns.items():
+                match = re.fullmatch(r"(?:The )?" + description + r" of ([\w'’ -]+?)(?:;[^.]+)?\.?", sense["definitions"][0], re.IGNORECASE)
+                if match and (base := candidate_term(match.group(1))):
+                    sense.update(formOf=base, formOfTerms=[base], formTags=["form-of", *tags])
+                    break
+            ipa = ipa_for(entry)
+            if ipa:
+                sense["ipa"] = ipa
+            insert_staging_sense(database, "en-en", term, sense)
+    database.commit()
 
 
 def ipa_for(entry: dict[str, Any]) -> str | None:
@@ -336,7 +365,7 @@ def write_chunked_packages(database: sqlite3.Connection, out_dir: Path, chunk_si
         buffer_bytes = 0
         for term, senses in groups:
             parsed_senses = [json.loads(payload) for payload in senses]
-            parsed_senses.sort(key=lambda sense: sense.get("partOfSpeech") == "name")
+            parsed_senses.sort(key=lambda sense: (not sense.get("learner", False), sense.get("partOfSpeech") == "name", sense.get("senseRank", 0)))
             entry_bytes = len(json.dumps({"term": term, "senses": parsed_senses}, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) + 1
             if buffer and (len(buffer) >= chunk_size or buffer_bytes + entry_bytes > 2 * 1024 * 1024):
                 chunks.append(write_stream_chunk(out_dir, direction, chunk_number, buffer))
@@ -387,6 +416,7 @@ def main() -> int:
     parser.add_argument("--out", type=Path, default=Path("artifacts/dictionaries"))
     parser.add_argument("--english-source", default="Kaikki English Wiktionary", help="Attribution name for the English input edition")
     parser.add_argument("--vietnamese-english", type=Path, help="Vietnamese entries with English glosses from English Wiktionary")
+    parser.add_argument("--learner-english", type=Path, help="Optional Kaikki Simple English Wiktionary source; prioritize its learner definitions")
     parser.add_argument("--data-version", default=DATA_VERSION)
     parser.add_argument("--progress", action="store_true")
     args = parser.parse_args()
@@ -396,8 +426,12 @@ def main() -> int:
         for staging_file in (database_path, Path(str(database_path) + "-wal"), Path(str(database_path) + "-shm")):
             staging_file.unlink(missing_ok=True)
         database = build_staging_database(args.english, args.vietnamese, database_path, args.vietnamese_english, args.progress)
+        if args.learner_english:
+            add_learner_english(database, args.learner_english)
         packs = write_chunked_packages(database, args.out, data_version=args.data_version, progress=args.progress)
         packs[0]["sources"] = [args.english_source]
+        if args.learner_english:
+            packs[0]["sources"].append("Kaikki Simple English Wiktionary; learner definitions")
         if args.vietnamese_english:
             packs[2]["sources"].append("Kaikki English Wiktionary; Vietnamese entries with English definitions")
         database.close()

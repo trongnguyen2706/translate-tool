@@ -56,7 +56,7 @@ def publish(source: Path, public: Path):
     attribution = "\n".join([
         "Dictionary data derived from Wiktionary contributors via Kaikki.org / Wiktextract.",
         "Sources: https://kaikki.org/dictionary/English/ ; https://kaikki.org/dictionary/Vietnamese/ ; https://kaikki.org/dictionary/rawdata.html",
-        "Source editions: English Wiktionary and Vietnamese Wiktionary.",
+        "Source editions: " + "; ".join(dict.fromkeys(name for pack in manifest["packages"] for name in pack.get("sources", []))) + ".",
         "License: CC BY-SA 4.0 / GFDL, as recorded in each package manifest.",
         "https://creativecommons.org/licenses/by-sa/4.0/ ; https://www.gnu.org/licenses/fdl-1.3.html",
         "Changes: selected language pairs; normalized terms; compacted definitions and relations; added explicit form aliases; split and compressed chunks.",

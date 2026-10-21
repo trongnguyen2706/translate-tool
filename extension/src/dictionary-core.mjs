@@ -12,7 +12,9 @@ export function lookupFromIndex(index, input) {
   const term = normalizeLookupTerm(input);
   const senses = index?.[term];
   if (!Array.isArray(senses) || !senses.length) return null;
-  return { term, senses: senses.map((sense) => ({ ...sense })) };
+  const learnerCount = senses.filter((sense) => sense.learner && isEverydaySense(sense)).length;
+  const everydayCount = senses.filter(isEverydaySense).length;
+  return { term, senses: senses.map((sense) => ({ ...sense })), basicSenseCount: Math.min(3, learnerCount || everydayCount || senses.length) };
 }
 
 export function getMissingFields(senses) {
@@ -76,6 +78,28 @@ export function describeWordForm(sense) {
   return relation.terms.length === 1 ? { baseForm: relation.terms[0], formNote: formLabel(relation, relation.terms[0]) } : null;
 }
 
+const SPECIAL_USAGE = /\b(?:archaic|obsolete|rare|dated|nonstandard|slang|informal|technical|chemistry|mathematics|logic|linguistics|phonetics|nuclear|finance|genetics|physics|computing)\b/i;
+const TECHNICAL_PROSE = /\b(?:uncool|proposition|entails|anions|cations|inflection|lenis|fundamental forces|proto-indo-european)\b/i;
+export function isEverydaySense(sense) {
+  return sense.formStatus !== "unresolved" && !SPECIAL_USAGE.test((sense.usageLabels ?? []).join(" "))
+    && !TECHNICAL_PROSE.test(sense.definitions?.[0] ?? "");
+}
+
+/** Prefer the learner edition and upstream order, never lexicographic sense IDs. */
+export function rankDictionarySenses(senses) {
+  const score = (sense) => (sense.formStatus === "unresolved" ? 1000 : 0)
+    + (isEverydaySense(sense) ? 0 : 100) + (sense.learner ? -50 : 0)
+    + (Number.isFinite(sense.senseRank) ? Math.min(sense.senseRank, 60) / 10
+      : /\b(?:strength|strong|power|ability)\b/i.test(sense.definitions?.[0] ?? "") ? -2 : 1);
+  const sorted = [...senses].sort((a, b) => score(a) - score(b));
+  const seen = new Set();
+  return sorted.filter((sense) => {
+    const key = JSON.stringify([sense.partOfSpeech, sense.baseForm ?? "", (sense.definitions?.[0] ?? "").trim().toLowerCase().replace(/[.;]+$/, "")]);
+    if (seen.has(key)) return false;
+    seen.add(key); return true;
+  });
+}
+
 async function formIdentity(term, sense, baseSense) {
   // Identity references are unique across the account, so an inflected form
   // must never reuse its base word's reference and silently merge their cards.
@@ -108,13 +132,17 @@ export async function resolveWordForms(term, senses, readSenses, mode, dataVersi
       if (seen.has(base)) continue;
       const candidates = (await read(base) ?? []).filter((candidate) =>
         posKey(candidate.partOfSpeech) === posKey(sense.partOfSpeech)
-        && (!candidate.glossLanguage || candidate.glossLanguage === language));
+        && (!candidate.glossLanguage || candidate.glossLanguage === language)
+        // Fixed expressions such as "excuse me" do not explain "she excuses".
+        && !/^You say[, ]/i.test(candidate.definitions?.[0] ?? ""));
       for (const candidate of candidates.slice(0, 60)) {
         if (expansions++ >= 256) break;
         const leaves = await resolve(base, candidate, new Set([...seen, base]), depth + 1);
         for (const leaf of leaves) {
           if (leaf.formStatus === "unresolved" || !leaf.definitions?.length || leaf.formStatus !== "resolved" && relationFor(leaf).onlyNote && relationFor(leaf).terms.length) continue;
           resolved.push({ ...sense, definitions: leaf.definitions, examples: sense.examples?.length ? sense.examples : leaf.examples ?? [],
+            learner: Boolean(leaf.learner), senseRank: leaf.senseRank,
+            usageLabels: [...new Set([...(sense.usageLabels ?? []), ...(leaf.usageLabels ?? [])])],
             // Pronunciation belongs to the selected form, never to the base.
             synonyms: sense.synonyms?.length ? sense.synonyms : leaf.synonyms ?? [],
             antonyms: sense.antonyms?.length ? sense.antonyms : leaf.antonyms ?? [],
@@ -138,5 +166,5 @@ export async function resolveWordForms(term, senses, readSenses, mode, dataVersi
     }
     if (output.length >= 200) break;
   }
-  return output.sort((a, b) => Number(a.formStatus === "unresolved") - Number(b.formStatus === "unresolved")).slice(0, 200);
+  return rankDictionarySenses(output).slice(0, 200);
 }
