@@ -44,6 +44,9 @@ Review upstream license and attribution requirements before distributing a pack.
 
 ## Current limits
 
+Extension 0.2.1 resolves explicit word forms locally and displays the base meaning
+with a short grammar note. See [word-form activation and verification](../docs/extension/WORD_FORMS.md).
+
 The checked-in repository contains the build pipeline and extension source; generated dictionary data is installed separately. YouTube CC rendering, sign-in, database RPCs, and offline restart behavior still require the staged browser/database checks recorded in `IMPLEMENTATION_LOG.md` before a release claim.
 
 ## Install dictionaries in local staging

@@ -8,9 +8,10 @@ export function definitionLanguage(mode) {
 /** @param {DictionaryMode} mode */
 export function definitionInstructions(mode) {
   const language = definitionLanguage(mode);
-  return language === "vi"
+  const forms = ' For inflected words, explain the actual meaning of the base word in the requested language. Never give only a grammar reference such as "plural of excuse" or "past tense of go". Match the selected part of speech and sense; use simple words.';
+  return (language === "vi"
     ? 'Every non-empty definitions item MUST be written in Vietnamese (tiếng Việt), with Vietnamese spelling and accents. Translate or explain the English term in Vietnamese. NEVER return an English paraphrase as a definition. Example: for "restructured", write "được tái cơ cấu; được tổ chức lại", NOT "organized or arranged again in a different way". Set definitionLanguage to "vi". Examples, synonyms, antonyms and collocations remain English; IPA is phonetic notation.'
-    : 'Every non-empty definitions item MUST be written in English. Explain the meaning in English, not Vietnamese. Set definitionLanguage to "en". Examples, synonyms, antonyms and collocations are English; IPA is phonetic notation.';
+    : 'Every non-empty definitions item MUST be written in English. Explain the meaning in English, not Vietnamese. Set definitionLanguage to "en". Examples, synonyms, antonyms and collocations are English; IPA is phonetic notation.') + forms;
 }
 
 // Reject obvious wrong-language prose; short loanwords and names are left alone.

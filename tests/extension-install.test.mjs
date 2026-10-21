@@ -34,6 +34,35 @@ function repository(version, entries, mode = "en-vi") {
 }
 const row = (term, definition, language = "vi") => ({ term, senses: [{ id: term, definitions: [definition], glossLanguage: language }] });
 
+test("worker resolves local word forms and saved meanings survive offline pack removal", async (t) => {
+  let repo = repository("forms-v1", [[
+    { term:"excuses", senses:[{id:"excuses-plural",partOfSpeech:"noun",definitions:["plural of excuse"],glossLanguage:"en"}] },
+    { term:"excuse", senses:[{id:"excuse-noun",partOfSpeech:"noun",definitions:["a reason given to explain a mistake"],glossLanguage:"en"}] }
+  ]], "en-en");
+  t.mock.method(globalThis,"fetch",async (input) => new URL(input).pathname === "/manifest.json" ? Response.json({schemaVersion:1,packages:[repo.pack]}) : new Response(repo.files.get(new URL(input).pathname)));
+  assert.equal((await send("install-dictionary",{manifestUrl:"https://dictionary.test/manifest.json",mode:"en-en"})).ok,true);
+  const sense = (await send("lookup-dictionary",{term:"excuses",mode:"en-en"})).data.result.senses[0];
+  assert.equal(sense.baseForm,"excuse"); assert.equal(sense.definitions[0],"a reason given to explain a mistake");
+  repo = repository("forms-v1",[[{term:"lý do",senses:[{id:"vi-excuses",partOfSpeech:"noun",definitions:["excuses"],sourceTerm:"excuses",glossLanguage:"en"}]}]],"vi-en");
+  await send("install-dictionary",{manifestUrl:"https://dictionary.test/manifest.json",mode:"vi-en"});
+  const reverse = (await send("lookup-dictionary",{term:"lý do",mode:"vi-en"})).data.result.senses[0];
+  assert.deepEqual(reverse.definitions,["excuses"]); assert.equal(reverse.sourceTerm,"excuses"); assert.equal(reverse.formNote,"Plural of excuse");
+  Object.defineProperty(navigator,"onLine",{configurable:true,value:false});
+  local.account = {userId:"forms-user",expiresAt:Date.now()+3600000,accessToken:"test-token",appOrigin:"http://localhost:3000"};
+  const operationId = crypto.randomUUID();
+  await send("save-capture",{capture:{operationId,term:"excuses",queryTerm:"excuses",mode:"en-en",selectedSense:{...sense,ipa:"/saved-form/"},pageUrl:"https://example.com/",context:"She makes excuses."}});
+  const merged = (await send("lookup",{term:"excuses",mode:"en-en"})).data.result.senses;
+  assert.equal(merged.length,1); assert.equal(merged[0].ipa,"/saved-form/","private filled fields are preserved when a raw dictionary form resolves to the same sense");
+  await removeDictionary("en-en");
+  const offline = (await send("lookup",{term:"excuses",mode:"en-en"})).data.result.senses[0];
+  assert.equal(offline.formNote,"Plural of excuse");
+  assert.equal(offline.dataVersion,"forms-v1");
+  assert.equal((await readRecord("queue",operationId)).context,"She makes excuses.");
+  assert.equal((await send("lookup-dictionary",{term:"excuses",mode:"en-en"})).data.result,null);
+  local.account = undefined;
+  Object.defineProperty(navigator,"onLine",{configurable:true,value:true});
+});
+
 test("dictionary installs activate atomically, preserve the old version on failure, and resume verified chunks", async (t) => {
   let current = repository("test-v1", [[row("bank", "ngân hàng"), row("eco-friendly", "thân thiện với môi trường")]]);
   let failPath = "";

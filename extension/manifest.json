@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Phrasebook — video and web dictionary",
   "description": "Look up words in downloaded dictionaries and save them with context to Phrasebook.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "permissions": [
     "storage",
     "identity",

@@ -22,7 +22,7 @@ from typing import Any, Iterable
 
 
 SCHEMA_VERSION = 1
-DATA_VERSION = "2026.10.19.1"
+DATA_VERSION = "2026.10.21.1-forms"
 MAX_TERM_LENGTH = 100
 MAX_DEFINITION_LENGTH = 500
 WORD_RE = re.compile(r"^[\w][\w'’ -]*$", re.UNICODE)
@@ -87,6 +87,17 @@ def senses_for(entry: dict[str, Any], gloss_language: str) -> list[dict[str, Any
             "examples": examples,
             "glossLanguage": gloss_language,
         })
+        # Keep the upstream relationship; runtime lookup follows it in the same
+        # language pack instead of guessing a stem by removing word endings.
+        bases = list(dict.fromkeys(
+            base for reference in sense.get("form_of", [])
+            if isinstance(reference, dict) and (base := candidate_term(reference.get("word")))
+        ))[:4]
+        if bases:
+            output[-1]["formOfTerms"] = bases
+            output[-1]["formOf"] = bases[0]
+            output[-1]["formTags"] = [tag for tag in sense.get("tags", [])
+                                      if isinstance(tag, str) and len(tag) <= 40][:20]
         for field in ("synonyms", "antonyms", "collocations"):
             related = []
             for item in [*sense.get(field, []), *entry.get(field, [])]:

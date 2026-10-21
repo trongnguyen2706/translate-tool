@@ -27,6 +27,8 @@
     .pbx-close { flex:none; width:30px; height:30px; border:0; border-radius:50%; background:#f1f5f9; color:#475569; font:20px/1 system-ui,sans-serif; cursor:pointer; }
     .pbx-content { padding:13px 16px; }
     .pbx-definition { margin:0; color:#0f172a; font-size:16px; font-weight:650; overflow-wrap:anywhere; }
+    .pbx-form { margin:0 0 9px; padding-left:9px; border-left:2px solid #2563eb; color:#475569; font-size:12px; }
+    .pbx-example-label { display:block; margin-bottom:3px; font-weight:650; }
     .pbx-example { margin:11px 0 0; padding:9px 10px; border-left:3px solid #93c5fd; background:#f8fafc; color:#475569; font-size:12px; }
     .pbx-missing { margin:10px 0 0; color:#64748b; font-size:12px; }
     .pbx-sense { width:100%; margin:0 0 10px; padding:7px 9px; border:1px solid #cbd5e1; border-radius:7px; background:white; color:#172554; font:13px system-ui,sans-serif; }
@@ -429,7 +431,7 @@
         select.disabled = Boolean(active.enriching);
         senses.forEach((item, index) => {
           const option = document.createElement("option"); option.value = String(index);
-          option.textContent = `${item.partOfSpeech ? `${item.partOfSpeech}: ` : ""}${item.definitions?.[0] ?? `Meaning ${index + 1}`}`;
+          option.textContent = `${item.partOfSpeech ? `${item.partOfSpeech}: ` : ""}${item.definitions?.[0] ?? "Base meaning unavailable"}`;
           select.append(option);
         });
         select.value = String(Math.max(0, senses.indexOf(sense)));
@@ -447,10 +449,13 @@
         });
         content.append(select);
       }
+      if (sense?.formNote) { const form = document.createElement("p"); form.className = "pbx-form"; form.textContent = sense.formNote; content.append(form); }
       const definition = document.createElement("p"); definition.className = "pbx-definition";
-      definition.textContent = sense?.definitions?.[0] ?? "No definition available";
+      definition.textContent = sense?.definitions?.[0] ?? (sense?.formStatus === "unresolved" ? `The meaning of ${sense.baseForm} is not available in this dictionary. You can fill it with AI.` : "No definition available");
       content.append(definition);
-      if (sense?.examples?.[0]) { const example = document.createElement("p"); example.className = "pbx-example"; example.textContent = sense.examples[0]; content.append(example); }
+      if (sense?.examples?.[0]) { const example = document.createElement("p"); example.className = "pbx-example";
+        if (sense.examplesFromBase) { const label = document.createElement("span"); label.className = "pbx-example-label"; label.textContent = `Example with ${sense.baseForm}`; example.append(label); }
+        example.append(document.createTextNode(sense.examples[0])); content.append(example); }
       const missing = getMissing(sense);
       if (mode === "vi-en" && !sense?.sourceTerm) missing.push("English headword for flashcards (click Fill with AI)");
       if (missing.length) { const note = document.createElement("p"); note.className = "pbx-missing"; note.textContent = `Missing: ${missing.join(", ")}.`; content.append(note); }
@@ -517,6 +522,8 @@
   }
 
   function renderDetails(parent, sense) {
+    if (sense.baseForm) addDetail(parent, "Base word", sense.baseForm);
+    if (sense.formNote) addDetail(parent, "Word form", sense.formNote);
     if (sense.partOfSpeech) addDetail(parent, "Part of speech", sense.partOfSpeech);
     if (sense.ipa) addDetail(parent, "IPA", sense.ipa);
     for (const [label, key] of [["Definitions", "definitions"], ["Examples", "examples"], ["Collocations", "collocations"], ["Synonyms", "synonyms"], ["Antonyms", "antonyms"]]) {
@@ -552,6 +559,7 @@
       const additions = result.data?.fields ?? {};
       const enrichedSense = { definitions: [], examples: [], synonyms: [], antonyms: [], collocations: [], ...sense };
       enrichedSense.glossLanguage = result.data.definitionLanguage;
+      if (additions.definitions?.length && enrichedSense.formStatus === "unresolved") enrichedSense.formStatus = "resolved";
       if (!enrichedSense.sourceTerm && typeof additions.sourceTerm === "string" && additions.sourceTerm.trim()) enrichedSense.sourceTerm = additions.sourceTerm.trim();
       for (const [field, value] of Object.entries(additions)) {
         if (field === "sourceTerm") continue;

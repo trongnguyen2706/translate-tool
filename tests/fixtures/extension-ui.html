@@ -23,7 +23,7 @@
   <video class="html5-main-video"></video>
   <div class="ytp-caption-window-container"><div class="caption-window"><span class="ytp-caption-segment">An eco-friendly company specifically for you</span></div></div>
   <div class="ytp-chrome-bottom"></div>
-  <div class="fixture-toolbar"><button id="fullscreen">Enter fullscreen</button> <button id="run">Run interaction checks</button> <button id="preview">Preview hover</button> <span id="screen-state">Normal view</span></div>
+  <div class="fixture-toolbar"><button id="fullscreen">Enter fullscreen</button> <button id="run">Run interaction checks</button> <button id="preview">Preview hover</button> <button id="preview-form">Preview word forms</button> <span id="screen-state">Normal view</span></div>
 </div>
 <h2 id="page-copy">Aesthetic unboxing and review</h2>
 <pre id="results" role="status">Ready</pre>
@@ -48,6 +48,10 @@
       if (request.type === 'read-status') return { ok:true, data:{ state:'unknown', items:statusItems } };
       if (request.type === 'save-capture') return { ok:true, data:{ queued:true } };
       if (request.type === 'enrich') return { ok:true, data:{ mode:request.mode, definitionLanguage:'vi', fields:{ examples:['This is a fixture example.'], ipa:'/test/' } } };
+      if (request.type === 'lookup' && request.term === 'excuses') return { ok:true, data:{ mode:'en-en', dataVersion:'forms-pack', result:{ senses:[
+        { id:'form:noun', partOfSpeech:'noun', baseForm:'excuse', formNote:'Plural of excuse', formStatus:'resolved', formDefinitions:['plural of excuse'], definitions:['A reason given to explain a mistake.'], examples:['That is a poor excuse.'], examplesFromBase:true },
+        { id:'form:verb', partOfSpeech:'verb', baseForm:'excuse', formNote:'Present form of excuse (he/she/it)', formStatus:'resolved', definitions:['To forgive someone.'] }
+      ] } } };
       if (request.type === 'lookup' && request.term === 'eco-friendly') return { ok:true, data:{ mode:request.mode, dataVersion:'new-pack', result:{ senses:[
         { id:'eco-friendly:adj:0', dataVersion:'saved-original-pack', partOfSpeech:'adj', definitions:['thân thiện với môi trường'] }
       ] } } };
@@ -74,6 +78,11 @@
     const target = document.querySelector('[data-pbx-word="eco-friendly"]');
     const rect = target.getBoundingClientRect();
     fire(target, 'pointermove', { clientX:rect.left+rect.width/2, clientY:rect.top+rect.height/2 });
+  };
+  document.querySelector('#preview-form').onclick = async () => {
+    escape(); window.getSelection().removeAllRanges(); statusItems = [];
+    document.querySelector('.ytp-caption-segment').textContent = 'She makes excuses'; await tick();
+    fire(document.querySelector('[data-pbx-word="excuses"]'), 'click');
   };
   const selectWord = (node, start, end) => {
     const selection = window.getSelection();
@@ -257,6 +266,21 @@
         document.dispatchEvent(new Event('fullscreenchange')); await tick();
         check(host.parentElement === document.documentElement, 'Simulated fullscreen exit restores the overlay outside the player');
       }
+      escape(); statusItems = []; segment.textContent = 'She makes excuses'; await tick();
+      fire(segment.querySelector('[data-pbx-word="excuses"]'),'click'); await tick();
+      check(shadow.querySelector('.pbx-definition')?.textContent === 'A reason given to explain a mistake.', 'Inflected words show a real base meaning in the small popup');
+      check(shadow.querySelector('.pbx-form')?.textContent === 'Plural of excuse', 'Word form is a separate readable note');
+      check(shadow.querySelector('.pbx-example-label')?.textContent === 'Example with excuse', 'Base-word examples are clearly labeled');
+      const formSelect = shadow.querySelector('[aria-label="Choose a meaning"]');
+      check(formSelect.options[1].textContent === 'verb: To forgive someone.', 'Meaning choices contain actual definitions instead of grammar references');
+      formSelect.value = '1'; formSelect.dispatchEvent(new Event('change')); await tick();
+      check(shadow.querySelector('.pbx-definition').textContent === 'To forgive someone.' && shadow.querySelector('.pbx-form').textContent.includes('he/she/it'), 'Changing part of speech updates both meaning and grammar note');
+      [...shadow.querySelectorAll('button')].find(button=>button.textContent==='Expand').click();
+      check(shadow.querySelector('.pbx-detail').textContent.includes('Base word') && shadow.querySelector('.pbx-detail').textContent.includes('excuse'), 'Expanded details include the base word');
+      shadow.querySelector('.pbx-primary').click(); await tick();
+      const formCapture = calls.filter(call=>call.type==='save-capture').at(-1).capture;
+      check(formCapture.term === 'excuses' && formCapture.selectedSense.baseForm === 'excuse' && formCapture.selectedSense.definitions[0] === 'To forgive someone.', 'Saving retains the clicked word, selected base sense and relationship');
+      escape(); segment.textContent = 'An eco-friendly company specifically for you'; await tick();
       document.querySelector('#results').textContent = `${results.join('\n')}\n${results.length}/${results.length} checks passed (${document.fullscreenElement ? 'fullscreen' : 'normal'})`;
       document.querySelector('#screen-state').textContent += ` — ${results.length} checks passed`;
     } catch (error) {

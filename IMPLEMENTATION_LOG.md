@@ -81,3 +81,22 @@ Mốc code local: commit `e4cb3f0` (`feat: add Chrome dictionary extension found
 
 - Vòng kiểm tra cuối: 56 UI checks, 12 Node extension tests, PostgreSQL integrity/RLS/deletion tests, 3 ZIP tests (gồm round-trip 2.101 mục), 3 language tests và 6 Python dictionary tests pass; lint/typegen/typecheck, production build và diff check pass. Gói release 0.2.0 được tạo theo whitelist 20 file; chưa cài qua Store.
 - ZIP release: 33,336 byte, 20 file đúng source, build lại cùng SHA-256 `a9bf0ed75e785ce4a98e85eb5c16e61b7e98bfceef2bb63eb9259abfb1fda9d3`. Chỉ gồm manifest/src/icons; không có dictionary, secret, fixture hoặc session.
+# 2026-10-21 — base meanings for word forms (extension 0.2.1)
+
+- Preserved upstream base-form links/tags in rebuilt dictionary data
+  `2026.10.21.1-forms`; verified and published the immutable local version.
+- Added bounded local resolution with POS/language matching, conservative
+  legacy English/Vietnamese grammar-note support, cycle/missing-base handling,
+  per-form/sense identity and preservation of personally filled fields.
+- Popup choices display definitions; a separate grammar note identifies the
+  base word. Base examples are labeled; base pronunciation is not inherited.
+  Vietnamese–English retains its translation/headword.
+- Capture/details and flashcards retain the base relationship without a new
+  SQL migration. Existing saved definitions/progress are preserved.
+- Validation: extension/storage/network tests, seven Python builder tests,
+  ten full-pack term/mode checks, PostgreSQL capture/replay/progress checks,
+  63 local browser interaction checks, lint, typecheck and production build.
+  Live installed-extension/YouTube and staged account flows remain operator
+  checks. No paid AI requests, R2 upload or Chrome Store submission.
+- Activation: `docs/extension/WORD_FORMS.md`; existing migrations 001–008 are
+  still prerequisites for the web writer APIs.

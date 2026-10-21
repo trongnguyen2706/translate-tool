@@ -28,6 +28,7 @@ const requestSchema = z.object({
   mode: z.enum(["en-en", "en-vi", "vi-en"]),
   source: z.enum(["ai", "dictionary"]).default("ai"),
   dictionary: z.object({ id: z.string().max(500).optional(), dataVersion: z.string().max(80),
+    baseForm: z.string().max(120).optional(), formNote: z.string().max(200).optional(), baseSenseId: z.string().max(500).optional(), examplesFromBase: z.boolean().optional(),
     definitions: z.array(z.string().max(500)).max(6), ipa: z.string().max(100).default(""),
     examples: z.array(z.string().max(500)).max(3).default([]), synonyms: z.array(z.string().max(120)).max(12).default([]),
     antonyms: z.array(z.string().max(120)).max(12).default([]), collocations: z.array(z.string().max(120)).max(6).default([])
@@ -136,6 +137,11 @@ export async function POST(request: NextRequest) {
       const hasValue = field === "ipa" ? Boolean(values.ipa.trim()) : nonEmptyList(value);
       if (!hasValue) continue;
       if (field === "definitions") {
+        if (source === "dictionary" && parsed.data.dictionary?.baseForm && !details.baseForm) {
+          nextDetails.baseForm = parsed.data.dictionary.baseForm;
+          nextDetails.formNote = parsed.data.dictionary.formNote;
+          nextDetails.baseSenseId = parsed.data.dictionary.baseSenseId;
+        }
         nextDetails.definitionsByLanguage = { ...definitionsByLanguage, [definitionLanguage]: values.definitions };
         if (!nonEmptyList(details.definitions)) {
           nextDetails.definitions = values.definitions;
@@ -145,6 +151,7 @@ export async function POST(request: NextRequest) {
       } else if (field === "ipa") nextDetails.ipa = values.ipa;
       else if (field === "examples") {
         nextDetails.examples = values.examples;
+        if (source === "dictionary") nextDetails.examplesFromBase = parsed.data.dictionary?.examplesFromBase ?? false;
         if (!item.example) payload.example = values.examples[0] ?? "";
       } else if (field === "collocations") {
         nextDetails.collocations = values.collocations;

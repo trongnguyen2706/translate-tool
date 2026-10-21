@@ -12,6 +12,7 @@ type Card = {
   ielts_relevance: "high" | "medium" | "low" | null;
   topics: string[]; tags: string[]; collocations: string[]; status: FlashcardStatus | null;
   source_daily_date: string | null; created_at: string;
+  details?: { baseForm?: string; formNote?: string; examplesFromBase?: boolean };
 };
 const statuses: FlashcardStatus[] = ["not_yet", "roughly", "learned", "mastered"];
 type CardLanguageMode = "en-en" | "en-vi" | "vi-en";
@@ -139,7 +140,8 @@ export function FlashcardsView() {
       <button type="button" className={`flashcard-surface ${flipped ? "flipped" : ""}`} onClick={() => setFlipped(!flipped)} aria-label={flipped ? t("Lật về mặt từ", "Flip to word") : t("Lật xem nghĩa", "Flip to meaning")}>
         <span className="flashcard-hint">{flipped ? backLabel : frontLabel}</span>
         <strong>{flipped ? backText : frontText}</strong>
-        {flipped && languageMode === "en-en" && card.example && <em>{card.example}</em>}
+        {flipped && card.details?.formNote && <small>{card.details.formNote}</small>}
+        {flipped && languageMode === "en-en" && card.example && <em>{card.details?.examplesFromBase && card.details.baseForm ? `${t("Ví dụ với", "Example with")} ${card.details.baseForm}: ` : ""}{card.example}</em>}
         <small><RotateCcw size={15} /> {t("Chạm để lật", "Tap to flip")}</small>
       </button>
       {!canRate && <div className="inline-notice" role="status"><span>{missingMeaning}</span> <a href="/library">{t("Mở Kho từ để bổ sung", "Open library to fill it")}</a></div>}

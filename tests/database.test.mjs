@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile, readdir } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
+import { resolveWordForms } from "../extension/src/dictionary-core.mjs";
 
 test("migrations preserve identity, transactions, progress, owner isolation and AI request reuse", async () => {
   const db = new PGlite();
@@ -61,6 +62,20 @@ test("migrations preserve identity, transactions, progress, owner isolation and 
     assert.equal((await db.query("select count(*)::int n from public.vocabulary_occurrences")).rows[0].n, 1, "repeated saves of the same context do not duplicate occurrences");
     assert.equal((await db.query("select status from public.flashcards where vocabulary_item_id=$1", [id])).rows[0].status, "mastered");
     assert.equal(await rpc("undo_vocabulary_save", [id, duplicate.item.revision]), false);
+    const baseSense = { id:"excuse-noun", partOfSpeech:"noun", definitions:["a reason given to explain a mistake"] };
+    const formSense = (await resolveWordForms("excuses", [{ id:"excuses-noun", partOfSpeech:"noun", definitions:["plural of excuse"] }], () => [baseSense], "en-en", "forms-v1"))[0];
+    const baseSaved = await rpc("save_vocabulary_item", [{term:"excuse",source_language:"en",meaning_en:baseSense.definitions[0],identity_provider:"kaikki-en",identity_reference:baseSense.id,identity_version:"forms-v1"}]);
+    const formPayload = {term:"excuses",kind:"word",source_language:"en",meaning_en:formSense.definitions[0],identity_provider:"kaikki-en",identity_reference:formSense.id,identity_version:"forms-v1",
+      details:{baseForm:formSense.baseForm,formNote:formSense.formNote,baseSenseId:formSense.baseSenseId}};
+    const formOccurrence = {...occurrence,selected_text:"excuses",context_text:"She makes excuses.",direction:"en-en"};
+    const formSaved = await rpc("capture_extension_word",[crypto.randomUUID(),"7".repeat(64),formPayload,formOccurrence]);
+    assert.notEqual(formSaved.item_id,baseSaved.item.id,"base and inflected terms keep separate vocabulary IDs");
+    const storedForm = (await db.query("select term,meaning_en,details from public.vocabulary_items where id=$1",[formSaved.item_id])).rows[0];
+    assert.equal(storedForm.term,"excuses"); assert.equal(storedForm.meaning_en,baseSense.definitions[0]);
+    assert.equal(storedForm.details.formNote,"Plural of excuse");
+    await db.query("update public.flashcards set status='learned' where vocabulary_item_id=$1",[formSaved.item_id]);
+    assert.equal((await rpc("capture_extension_word",[crypto.randomUUID(),"7".repeat(64),formPayload,formOccurrence])).item_id,formSaved.item_id);
+    assert.equal((await db.query("select status from public.flashcards where vocabulary_item_id=$1",[formSaved.item_id])).rows[0].status,"learned");
     const oldId = "44444444-4444-4444-8444-444444444444", partId = "55555555-5555-4555-8555-555555555555";
     const backup = { version: 4, vocabulary: [{ id: oldId, term: "bank", source_language: "en", meaning_vi: "ngân hàng" }],
       flashcards: [{ vocabulary_item_id: oldId, status: "not_yet" }], translations: [] };

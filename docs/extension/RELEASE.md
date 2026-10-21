@@ -2,6 +2,9 @@
 
 Audio pronunciation is excluded. IPA remains text metadata. AI balance/budget UI remains excluded at the user's request.
 
+For extension 0.2.1, see [word-form activation](WORD_FORMS.md). Its optional JSON
+metadata uses the existing schema; no migration beyond 001–008 is introduced.
+
 ## Apply backend changes
 
 1. Take a verified staging database snapshot. Apply migrations 006, 007, 008 in order after 001–005. Do not deploy the new writers against a database missing 007. These migrations add an owner-scoped request cache, stable meaning aliases and atomic backup checkpoints. Migration 007 removes the old content-based unique constraint; existing IDs, flashcards and study sets remain intact.

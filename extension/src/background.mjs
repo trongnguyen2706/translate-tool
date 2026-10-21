@@ -1,4 +1,4 @@
-import { lookupFromIndex, normalizeLookupTerm, normalizeMode } from "./dictionary-core.mjs";
+import { lookupFromIndex, normalizeLookupTerm, normalizeMode, resolveWordForms, describeWordForm } from "./dictionary-core.mjs";
 import { getActivePackage, getPackage, getEntry, listQueue, listPackages, openDatabase, putQueueItem, transaction, readRecord, rememberSense, removeDictionary } from "./storage.mjs";
 import { requestJson } from "./network.mjs";
 
@@ -114,12 +114,27 @@ async function lookup(term, requestedMode, includePersonal = true) {
   if (!pack?.active) return { mode, result: personal ? { term: normalized, senses: personal.senses } : null, missingPack: !personal, source: personal ? "personal" : "dictionary" };
   const senses = await getEntry(pack.packageId, normalized);
   if (senses || personal) {
-    const combined = [...(senses ?? [])];
-    for (const saved of personal?.senses ?? []) {
+    const combined = await resolveWordForms(normalized, senses ?? [], (base) => getEntry(pack.packageId, base), mode, pack.dataVersion);
+    const savedSenses = await resolveWordForms(normalized, personal?.senses ?? [], (base) => getEntry(pack.packageId, base), mode, pack.dataVersion);
+    for (const saved of savedSenses) {
       const index = combined.findIndex((sense) => saved.id ? sense.id === saved.id : JSON.stringify(sense.definitions) === JSON.stringify(saved.definitions));
       if (index < 0) combined.push(saved); else combined[index] = { ...combined[index], ...saved };
     }
-    return { mode, result: lookupFromIndex({ [normalized]: combined }, normalized), source: personal ? "personal+dictionary" : "dictionary", dataVersion: pack.dataVersion };
+    const resolved = combined;
+    // A Vietnamese lookup must keep its English translation/headword intact.
+    // Add only an unambiguous grammar note from the optional English pack.
+    const englishPack = mode === "vi-en" ? await getActivePackage("en-en") : null;
+    const englishReads = new Map();
+    if (englishPack) for (const sense of resolved) {
+      if (!sense.sourceTerm || !sense.partOfSpeech) continue;
+      const headword = normalizeLookupTerm(sense.sourceTerm);
+      if (!englishReads.has(headword) && englishReads.size < 32) englishReads.set(headword, await getEntry(englishPack.packageId, headword) ?? []);
+      const matches = (englishReads.get(headword) ?? []).filter((candidate) => candidate.partOfSpeech === sense.partOfSpeech);
+      const notes = matches.map(describeWordForm);
+      const unique = new Map(notes.filter(Boolean).map((note) => [JSON.stringify(note), note]));
+      if (notes.length && notes.every(Boolean) && unique.size === 1) Object.assign(sense, [...unique.values()][0]);
+    }
+    return { mode, result: lookupFromIndex({ [normalized]: resolved }, normalized), source: personal ? "personal+dictionary" : "dictionary", dataVersion: pack.dataVersion };
   }
   return { mode, result: null, source: "dictionary", dataVersion: pack.dataVersion };
 }

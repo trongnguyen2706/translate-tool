@@ -308,7 +308,7 @@ export function LibraryView() {
           });
           if (stopEnrichRef.current) break;
           if (!sense) { setEnrichProgress({ processed: index + 1, total: ids.length, updated }); continue; }
-          dictionary = { id: sense.id, dataVersion: pack.dataVersion, definitions: (sense.definitions ?? []).slice(0, 6).map((text) => text.slice(0, 500)), ipa: sense.ipa ?? "",
+          dictionary = { id: sense.id, dataVersion: pack.dataVersion, baseForm: sense.baseForm, formNote: sense.formNote, baseSenseId: sense.baseSenseId, examplesFromBase: sense.examplesFromBase, definitions: (sense.definitions ?? []).slice(0, 6).map((text) => text.slice(0, 500)), ipa: sense.ipa ?? "",
             examples: (sense.examples ?? []).slice(0, 3), synonyms: (sense.synonyms ?? []).slice(0, 12), antonyms: (sense.antonyms ?? []).slice(0, 12), collocations: (sense.collocations ?? []).slice(0, 6) };
         }
         const response = await fetch("/api/vocabulary/enrich", {

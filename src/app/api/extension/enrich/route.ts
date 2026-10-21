@@ -16,6 +16,8 @@ const schema = z.object({
   fields: z.array(z.enum(fields)).min(1).max(fields.length),
   current: z.object({
     sourceTerm: z.string().max(120).nullish(),
+    baseForm: z.string().max(120).optional(),
+    formNote: z.string().max(200).optional(),
     partOfSpeech: z.string().max(40).nullish(),
     definitions: z.array(z.string().max(500)).max(6).optional(),
     ipa: z.string().max(100).nullish(),

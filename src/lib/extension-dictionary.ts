@@ -1,5 +1,7 @@
 export type DictionarySense = {
   id?: string; partOfSpeech?: string; sourceTerm?: string; ipa?: string; glossLanguage?: string;
+  baseForm?: string; baseSenseId?: string; formNote?: string; formStatus?: "resolved" | "unresolved";
+  formDefinitions?: string[]; examplesFromBase?: boolean;
   definitions?: string[]; examples?: string[]; synonyms?: string[]; antonyms?: string[]; collocations?: string[];
 };
 export function lookupExtensionDictionary(term: string, mode: string): Promise<{ senses: DictionarySense[]; dataVersion: string }> {

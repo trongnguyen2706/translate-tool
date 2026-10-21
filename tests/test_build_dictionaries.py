@@ -12,6 +12,15 @@ SPEC.loader.exec_module(builder)
 
 
 class DictionaryBuildTests(unittest.TestCase):
+    def test_preserves_irregular_base_links_and_bounded_grammar_tags(self):
+        senses = builder.senses_for({"word": "went", "pos": "verb", "senses": [{
+            "glosses": ["past tense of go"], "form_of": [{"word": "go"}, {"word": "go"}],
+            "tags": ["form-of", "past"]
+        }]}, "en")
+        self.assertEqual(senses[0]["formOfTerms"], ["go"])
+        self.assertEqual(senses[0]["formOf"], "go")
+        self.assertEqual(senses[0]["formTags"], ["form-of", "past"])
+
     def test_builds_three_indexes_and_only_reverses_explicit_translations(self):
         fixtures = Path(__file__).parent / "fixtures"
         en_en = builder.build_en_en(fixtures / "dictionary-english.jsonl")
